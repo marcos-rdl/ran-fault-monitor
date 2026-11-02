@@ -11,16 +11,20 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS alarms (
     id          BIGSERIAL PRIMARY KEY,
     node        TEXT        NOT NULL,
+    region      TEXT        NOT NULL,
+    hub         TEXT        NOT NULL,
     alarm       TEXT        NOT NULL,
     severity    TEXT        NOT NULL,
-    raised_at   TIMESTAMPTZ NOT NULL,
+    event       TEXT        NOT NULL CHECK (event IN ('raise', 'clear')),
+    ts          TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS alarms_node_time ON alarms (node, raised_at);
+CREATE INDEX IF NOT EXISTS alarms_node_time ON alarms (node, ts);
 """
 
-INSERT = "INSERT INTO alarms (node, alarm, severity, raised_at) VALUES (%s, %s, %s, %s)"
-
+INSERT = """INSERT INTO alarms (node, region, hub, alarm, severity, event, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+            
 consumer = Consumer({
     "bootstrap.servers": KAFKA,
     "group.id": "collector",
@@ -43,7 +47,7 @@ with psycopg.connect(DB) as conn:
                     print("Kafka error:", msg.error())
                     continue
                 e = json.loads(msg.value())
-                rows.append((e["node"], e["alarm"], e["severity"], e["ts"]))
+                rows.append((e["node"], e["region"], e["hub"], e["alarm"], e["severity"], e["event"], e["ts"]))
             if rows:
                 with conn.cursor() as cur:
                     cur.executemany(INSERT, rows)
