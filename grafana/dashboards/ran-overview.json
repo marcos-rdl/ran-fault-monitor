@@ -627,16 +627,16 @@
     {
       "id": 9,
       "type": "table",
-      "title": "Sites with the most incidents",
-      "description": "Sites that keep failing. Step 10 will flag these automatically.",
+      "title": "Flaky sites (anomaly detector)",
+      "description": "Sites failing far more often than the network average (z-score of faults in the last hour). Found by detector/detector.py.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "ranmon-pg"
       },
       "gridPos": {
-        "x": 0,
+        "x": 12,
         "y": 21,
-        "w": 24,
+        "w": 12,
         "h": 8
       },
       "targets": [
@@ -646,7 +646,81 @@
             "type": "grafana-postgresql-datasource",
             "uid": "ranmon-pg"
           },
-          "rawSql": "SELECT root AS site, region, hub, count(*) AS incidents,\n       count(*) FILTER (WHERE kind = 'NODE_DOWN') AS outages,\n       max(opened_at) AS last_incident\nFROM incidents\nWHERE root LIKE 'gNB-%' AND status <> 'merged' AND $__timeFilter(opened_at)\nGROUP BY root, region, hub ORDER BY incidents DESC LIMIT 10",
+          "rawSql": "SELECT site, hub, faults AS \"faults (1h)\", z_score AS \"z-score\", first_seen AS \"flagged since\"\nFROM anomalies WHERE active ORDER BY z_score DESC",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "z-score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 6
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Sites with the most incidents",
+      "description": "Sites that keep failing. Step 10 will flag these automatically.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ranmon-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ranmon-pg"
+          },
+          "rawSql": "SELECT root AS site, hub, count(*) AS incidents,\n       count(*) FILTER (WHERE kind = 'NODE_DOWN') AS outages,\n       max(opened_at) AS last_incident\nFROM incidents\nWHERE root LIKE 'gNB-%' AND status <> 'merged' AND $__timeFilter(opened_at)\nGROUP BY root, region, hub ORDER BY incidents DESC LIMIT 10",
           "format": "table",
           "rawQuery": true,
           "editorMode": "code"
