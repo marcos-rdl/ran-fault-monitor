@@ -31,6 +31,7 @@ for region in REGIONS:
             sites.append({"node": f"gNB-{len(sites):04d}", "region": region, "hub": hub, "busy": False})
 hubs = {s["hub"]: s["region"] for s in sites}
 hubs_down = set()
+active = {}   # alarms raised and not cleared ye
 flaky = set(random.sample(range(len(sites)), FLAKY_SITES))
 
 # ---------- scheduling things for later ----------
@@ -46,6 +47,10 @@ def send(node, region, hub, alarm, severity, event="raise"):
         "alarm": alarm, "severity": severity, "event": event,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
+    if event == "raise":
+        active[(node, alarm)] = (region, hub, severity)
+    else:
+        active.pop((node, alarm), None)
     producer.produce(TOPIC, key=node, value=json.dumps(msg))
     producer.poll(0)
     print(f"{msg['ts'][11:19]}  {event:5}  {severity:8}  {alarm:19}  {node} ({hub})")
@@ -138,5 +143,8 @@ try:
         producer.poll(0)
         time.sleep(TICK)
 except KeyboardInterrupt:
+    # demo convenience: clear what's still open, so a stopped simulator doesn't leave sites "down" forever
+    print(f"Clearing {len(active)} open alarms before stopping...")
+    for (node, name), (region, hub, severity) in list(active.items()):
+        send(node, region, hub, name, severity, "clear")
     producer.flush()
-    print("Simulator stopped.")

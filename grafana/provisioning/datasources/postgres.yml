@@ -1,0 +1,14 @@
+apiVersion: 1
+datasources:
+  - name: RAN PostgreSQL
+    type: grafana-postgresql-datasource
+    uid: ranmon-pg
+    url: postgres:5432
+    user: ranmon
+    isDefault: true
+    jsonData:
+      database: ranmon
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: ranmon
