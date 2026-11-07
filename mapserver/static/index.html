@@ -24,12 +24,13 @@ header{grid-area:head;display:flex;flex-wrap:wrap;align-items:center;justify-con
 .titles{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px}
 h1{font-family:var(--display);font-size:clamp(13px,1.6vw,18px);margin:0;color:var(--accent);letter-spacing:.04em;text-wrap:balance}
 .tag{color:var(--dim)}
-.screen{grid-area:map;position:relative;min-height:0;border:4px solid var(--line);background:#57557d;box-shadow:0 0 0 2px #000,0 0 28px #9fd4ff22}
+.screen{grid-area:map;position:relative;min-height:0;overflow:hidden;border:4px solid var(--line);background:#57557d;box-shadow:0 0 0 2px #000,0 0 28px #9fd4ff22}
 #city{position:absolute;inset:0;display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+#world{position:absolute;left:0;top:0;display:block;transform-origin:0 0;image-rendering:crisp-edges;image-rendering:pixelated;pointer-events:none}
 .bottom{grid-area:feed;display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px}
 .feed{display:flex;flex-direction:column}
 .feed .log{flex:1 1 0;min-height:calc(5 * 1.15em);overflow:hidden;column-fill:auto}
-.side{grid-area:side;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow-y:auto}
+.side{grid-area:side;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow-y:auto;scrollbar-gutter:stable;scrollbar-width:thin}
 .side .incbox{flex:1 0 140px;display:flex;flex-direction:column;min-height:140px}
 .incbox ul{flex:1;min-height:0;overflow-y:auto}
 @media (max-width:900px), (max-height:560px){
@@ -126,11 +127,18 @@ ul{list-style:none;margin:0;padding:0}
 <script>
 (() => {
 const $ = s => document.querySelector(s);
+// every canvas is drawn by the CPU: the page reads pixels back and copies many small canvases into
+// big ones, which a GPU-backed canvas does slowly and on some Firefox setups stalls the tab completely
+const CPU = { willReadFrequently: true };
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const N = 69, OX = N * 8 + 16, OY = 70, CW = N * 16 + 32, CH = OY + N * 8 + 18;
-const cv = document.createElement('canvas'), ctx = cv.getContext('2d');
+const cv = document.createElement('canvas'), ctx = cv.getContext('2d', CPU);
 cv.width = CW; cv.height = CH; ctx.imageSmoothingEnabled = false;
-const view = $('#city'), vctx = view.getContext('2d');
+// cv holds the whole city at 1 pixel per art pixel and is shown scaled up by CSS (whole device
+// pixels, no smoothing), so the browser's compositor does the scaling instead of the page.
+// #city, on top of it, is transparent: it takes the mouse and holds the sharp text labels.
+cv.id = 'world'; cv.setAttribute('aria-hidden', 'true');
+const view = $('#city'), vctx = view.getContext('2d', CPU); view.before(cv);
 const C = { up:'#4fe08f', warn:'#ffb63a', down:'#ff5468', gold:'#ffe08a' };
 
 let seed = 3112026;
@@ -199,7 +207,7 @@ function mast(g, px, py, tall) {
 function sprite(x, y, w, d, hTop, fn) {
   const minX = iso(x, y + d)[0] - 6, maxX = iso(x + w, y)[0] + 6, minY = iso(x, y)[1] - hTop - 24, maxY = iso(x + w, y + d)[1] + 6;
   const c = document.createElement('canvas'); c.width = maxX - minX; c.height = maxY - minY;
-  const g = c.getContext('2d'); g.translate(-minX, -minY); const out = fn(g) || {};
+  const g = c.getContext('2d', CPU); g.translate(-minX, -minY); const out = fn(g) || {};
   return { canvas: c, ox: minX, oy: minY, ...out };
 }
 
@@ -241,7 +249,7 @@ BLOCKS.forEach(b => { for (let y = b.Y0; y < b.Y0 + BS; y++) for (let x = b.X0; 
 
 // ---------- ground ----------
 const ground = document.createElement('canvas'); ground.width = CW; ground.height = CH;
-const gg = ground.getContext('2d'); gg.imageSmoothingEnabled = false;
+const gg = ground.getContext('2d', CPU); gg.imageSmoothingEnabled = false;
 gg.fillStyle = '#57557d'; gg.fillRect(0, 0, CW, CH);
 const GRASS = ['#6f9b52', '#79a65a', '#68924c'];
 const PAVE = { EAST: '#bdb9cf', SOUTH: '#aaa8b9', CENTRAL: '#c3bfd3', PLAZA: '#cdc9dc' };
@@ -413,7 +421,7 @@ BLOCKS.filter(b => b.hub).forEach(b => {
   const masts = [];
   const far = (lx, ly, D) => masts.every(m => { const dx = m.lx - lx, dy = (m.ly - ly) * 1.6; return dx * dx + dy * dy >= D * D; });
   for (const sp of shuffle(b.spots)) { if (masts.length >= 10) break; const ly0 = sp.py - (sp.tall ? 16 : 11) - 2; if (!far(sp.px, ly0, 16)) continue;
-    const g = sp.e.canvas.getContext('2d'); g.setTransform(1, 0, 0, 1, -sp.e.ox, -sp.e.oy);
+    const g = sp.e.canvas.getContext('2d', CPU); g.setTransform(1, 0, 0, 1, -sp.e.ox, -sp.e.oy);
     const [lx, ly] = mast(g, sp.px, sp.py, sp.tall); masts.push({ e: sp.e, lx, ly, where: 'mast on ' + sp.kind }); }
   const cands = shuffle(b.tiles.filter(([x, y]) => (free(x, y) && !inField(x, y)) || (sidewalk(x, y) && !occ[y][x])).map(([x, y]) => ({ x, y, pole: sidewalk(x, y) })));
   for (const D of [44, 36, 28, 20, 12, 0]) for (const c of cands) {
@@ -456,6 +464,7 @@ const lake = BLOCKS.find(b => b.kind === 'LAKE'), boat = { t: 0 };
 
 // ---------- live state, pushed by the map service every 2 seconds ----------
 let simT = 0, snapshot = null, lastMessage = 0, hubsDownNow = new Set(), incidents = [];
+let sceneDirty = true, stateVer = 0;   // the still picture of the city is redrawn only when a light changes colour
 const nodeByName = {}, hubByName = {};
 nodes.forEach(n => nodeByName[n.name] = n); hubs.forEach(h => hubByName[h.name] = h);
 nodes.forEach(n => { n.alarms = []; n.incident = null; });
@@ -467,16 +476,28 @@ const hhmmss = iso => new Date(iso).toLocaleTimeString([], { hour12: false });
 function apply(s) {
   snapshot = s; lastMessage = Date.now();
   if (s.ok) {
-    nodes.forEach(n => { const x = s.sites[n.name]; n.state = x ? x.state : 'up'; n.alarms = x ? x.alarms : []; n.incident = x ? x.incident : null; });
-    hubsDownNow = new Set(s.hubs_down); incidents = s.incidents;
+    let changed = false;
+    nodes.forEach(n => { const x = s.sites[n.name], st = x ? x.state : 'up'; if (st !== n.state) changed = true;
+      n.state = st; n.alarms = x ? x.alarms : []; n.incident = x ? x.incident : null; });
+    const down = new Set(s.hubs_down);
+    if (down.size !== hubsDownNow.size || [...down].some(h => !hubsDownNow.has(h))) changed = true;
+    hubsDownNow = down; incidents = s.incidents;
+    if (changed) { stateVer++; sceneDirty = true; }
   }
   render();
 }
-let socket;
+// The map service pushes a snapshot every 2 s. If nothing arrives for 8 s the connection is
+// treated as dead (a sleeping laptop or a proxy can leave it open but silent) and is reopened.
+let socket, socketSince = 0;
 function connect() {
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  socket.onmessage = e => apply(JSON.parse(e.data));
-  socket.onclose = () => setTimeout(connect, 2000);
+  socketSince = Date.now();
+  const ws = socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.onmessage = e => { try { apply(JSON.parse(e.data)); } catch (err) { console.error('Bad snapshot', err); } };
+  ws.onerror = () => ws.close();
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+function watchdog() {
+  if (socket.readyState !== WebSocket.CLOSED && Date.now() - Math.max(lastMessage, socketSince) > 8000) { socketSince = Date.now(); socket.close(); }
 }
 connect();
 function walkable(x, y) { return inMap(x, y) && !isRoad(x, y) && !isWater(x, y) && !occ[Math.floor(y)][Math.floor(x)]; }
@@ -492,13 +513,20 @@ function step(dt) {
 
 // ---------- rendering ----------
 let hover = null, selected = null;
+// a light that is down blinks and sends out a fading ring; both change in a few coarse steps,
+// so a blinking light only needs repainting every few frames
+function pulse(n, big) {
+  const t = simT + n.phase, p = (t % 1200) / 1200;
+  return { on: Math.floor(t / 300) % 2 === 0, r: Math.round((big ? 4 : 3) + p * (big ? 14 : 9)), a: Math.round((1 - p) * 10) / 10 };
+}
+// the red glow over a neighbourhood whose hub is down pulses in five steps
+const tintAlpha = () => reduce ? .22 : Math.round((.16 + .1 * Math.sin(simT / 220)) * 20) / 20;
 function drawLight(n, big) {
   const st = n.isHub ? (hubDown(n.name) ? 'down' : 'up') : eff(n), col = st === 'up' ? C.up : st === 'degraded' ? C.warn : C.down, { lx, ly } = n;
   let on = true;
   if (st === 'down' && !reduce) {
-    on = Math.floor((simT + n.phase) / 300) % 2 === 0;
-    const p = ((simT + n.phase) % 1200) / 1200, r = Math.round((big ? 4 : 3) + p * (big ? 14 : 9));
-    ctx.strokeStyle = `rgba(255,84,104,${(1 - p).toFixed(2)})`; ctx.lineWidth = 1; ctx.strokeRect(lx - r + .5, ly - r + .5, r * 2, r * 2);
+    const q = pulse(n, big); on = q.on;
+    ctx.strokeStyle = `rgba(255,84,104,${q.a})`; ctx.lineWidth = 1; ctx.strokeRect(lx - q.r + .5, ly - q.r + .5, q.r * 2, q.r * 2);
   }
   const s = big ? 2 : 1;
   if (on) { ctx.fillStyle = col + '66'; ctx.fillRect(lx - 1 - s, ly - 1 - s, 3 + 2 * s, 3 + 2 * s); ctx.fillStyle = col; ctx.fillRect(lx - s, ly - s, 1 + 2 * s, 1 + 2 * s); ctx.fillStyle = '#fff'; ctx.fillRect(lx - s, ly - s, 1, 1); }
@@ -533,36 +561,139 @@ function labels() {
   hubs.forEach(h => { const dn = hubDown(h.name); if (zoomed || dn) tag(h.name + (dn ? ' DOWN' : ''), h.lx, h.ly - 5, dn ? C.down : '#ece8ff', true); });
   REGIONS.forEach(r => { const dn = hubs.some(h => h.region === r && hubDown(h.name)); const [x, y] = REGION_AT[r], [wx, wy] = iso(x, y); tag(r, wx, wy - 20, dn ? C.down : '#ece8ff'); });
 }
-let last = performance.now();
-function frame(ts) {
-  const dt = Math.min(100, ts - last); last = ts; step(dt);
+// ---------- one frame ----------
+// Drawing all 1,300 sprites 60 times a second kept a laptop busy enough to freeze the tab once
+// a hub failed. Now the still city (ground, buildings, trees, steady lights) is drawn once, and
+// again only when a light changes colour. At about 30 fps, each frame repaints only the 16 px
+// tiles where something looks different from the frame before: a car that moved a pixel, a
+// light that blinked. Everything else on the canvas is left as it was.
+ents.sort((a, b) => a.key - b.key); ents.forEach((e, i) => e.seq = i);   // stable: same order as before
+ents.forEach(e => { if (e.lights) e.lights.forEach(i => nodes[i].ent = e); if (e.hubLight) e.hubLight.ent = e; });
+const T = 16, TW = Math.ceil(CW / T), TH = Math.ceil(CH / T);
+// the area each sprite really paints: its non-transparent pixels plus the halos of its lights
+const probe = document.createElement('canvas').getContext('2d', CPU);
+function opaqueBounds(c) {   // [x0, y0, x1, y1) of the pixels a sprite canvas actually paints, or null
+  if (c.opaque !== undefined) return c.opaque;
+  probe.canvas.width = c.width; probe.canvas.height = c.height; probe.drawImage(c, 0, 0);
+  const px = probe.getImageData(0, 0, c.width, c.height).data;
+  let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (px[(y * c.width + x) * 4 + 3]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  return c.opaque = x1 < 0 ? null : [x0, y0, x1 + 1, y1 + 1];
+}
+function paintedBox(e) {
+  const o = opaqueBounds(e.canvas);
+  const box = o ? [e.ox + o[0], e.oy + o[1], e.ox + o[2], e.oy + o[3]] : [Infinity, Infinity, -Infinity, -Infinity];
+  const grow = (n, r) => { box[0] = Math.min(box[0], n.lx - r); box[1] = Math.min(box[1], n.ly - r); box[2] = Math.max(box[2], n.lx + r + 1); box[3] = Math.max(box[3], n.ly + r + 1); };
+  if (e.lights) e.lights.forEach(i => grow(nodes[i], 3)); if (e.hubLight) grow(e.hubLight, 4);
+  return box[0] === Infinity ? [e.ox, e.oy, e.ox + 1, e.oy + 1] : box;
+}
+const entsAt = Array.from({ length: TW * TH }, () => []);   // the sprites that paint into each tile
+ents.forEach(e => { const [bx0, by0, bx1, by1] = paintedBox(e);
+  const x0 = Math.max(0, Math.floor(bx0 / T)), x1 = Math.min(TW - 1, Math.floor((bx1 - 1) / T));
+  const y0 = Math.max(0, Math.floor(by0 / T)), y1 = Math.min(TH - 1, Math.floor((by1 - 1) / T));
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) entsAt[ty * TW + tx].push(e); });
+let dirty = new Uint8Array(TW * TH), stamp = 0, screenKey = '', labelsKey = '', miniKey = '';
+const blinking = n => !reduce && (n.isHub ? hubDown(n.name) : eff(n) === 'down');
+// calls fn for each tile index under a rectangle, and returns true as soon as fn does
+function tilesUnder(x, y, w, h, fn) {
+  const x0 = Math.max(0, Math.floor(x / T)), x1 = Math.min(TW - 1, Math.floor((x + w - 1) / T));
+  const y0 = Math.max(0, Math.floor(y / T)), y1 = Math.min(TH - 1, Math.floor((y + h - 1) / T));
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) if (fn(ty * TW + tx)) return true;
+  return false;
+}
+const mark = (x, y, w, h) => tilesUnder(x, y, w, h, i => { dirty[i] = 1; });
+const touchesDirty = (x, y, w, h) => tilesUnder(x, y, w, h, i => dirty[i]);
+// what each moving or blinking thing looked like last frame; when that changes, the tiles under
+// its old and its new place are repainted. look === null means it is not drawn at all.
+const looks = new Map();
+// a car or a person can pass behind a tree without moving a pixel on screen, so their look also
+// says how many sprites are drawn before them
+const entKeys = ents.map(e => e.key);
+function depth(key) { let lo = 0, hi = entKeys.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (entKeys[mid] <= key) lo = mid + 1; else hi = mid; } return lo; }
+function seen(id, look, x, y, w, h, fresh) {
+  const old = looks.get(id);
+  if (!fresh && old && old.look === look) return;
+  if (!fresh && old && old.look !== null) mark(old.x, old.y, old.w, old.h);
+  if (look !== null) mark(x, y, w, h);
+  looks.set(id, { look, x, y, w, h });
+}
+// calls fn once per run of consecutive tiles in a row that pass the test
+function runs(test, fn) {
+  for (let ty = 0; ty < TH; ty++) for (let tx = 0; tx < TW; tx++) { if (!test(ty * TW + tx)) continue;
+    let e = tx; while (e + 1 < TW && test(ty * TW + e + 1)) e++;
+    fn(tx * T, ty * T, Math.min(CW, (e + 1) * T) - tx * T, Math.min(CH, (ty + 1) * T) - ty * T); tx = e; }
+}
+function clipTo(test) { ctx.save(); ctx.beginPath(); runs(test, (x, y, w, h) => ctx.rect(x, y, w, h)); ctx.clip(); }
+function drawScene() {
   ctx.drawImage(ground, 0, 0);
-  if (!reduce) { ctx.fillStyle = '#9dbdea'; const ph = Math.floor(simT / 450); waves.forEach(w => { if ((ph + w.p) % 3 === 0) ctx.fillRect(w.x, w.y, 3, 1); }); }
-  BLOCKS.forEach(b => { if (!b.hub || !hubDown(b.hub)) return;
-    const a = reduce ? .22 : .16 + .1 * Math.sin(simT / 220); ctx.globalAlpha = Math.max(0, a);
-    b.tiles.forEach(([x, y]) => diamond(ctx, x, y, '#ff3050')); ctx.globalAlpha = 1; });
-  const list = ents.slice();
-  cars.forEach(c => { const gx = c.axis === 'x' ? c.t : c.lane, gy = c.axis === 'x' ? c.lane : c.t;
-    if (gx < 0 || gy < 0 || gx >= N || gy >= N) return;
-    const s = carSprite(c.col, c.axis), [sx, sy] = iso(gx, gy), [bx, by] = iso(0, 0);
-    list.push({ key: gx + gy + .6, canvas: s.canvas, ox: s.ox + sx - bx, oy: s.oy + sy - by }); });
-  people.forEach(p => { const [sx, sy] = iso(p.x, p.y); list.push({ key: p.x + p.y, draw: () => { ctx.fillStyle = p.col; ctx.fillRect(sx, sy - 3, 1, 3); ctx.fillStyle = '#f1c9a5'; ctx.fillRect(sx, sy - 4, 1, 1); } }); });
+  ents.forEach(e => { ctx.drawImage(e.canvas, e.ox, e.oy);
+    if (e.lights) e.lights.forEach(i => { if (!blinking(nodes[i])) drawLight(nodes[i]); });
+    if (e.hubLight && !blinking(e.hubLight)) drawLight(e.hubLight, true); });
+}
+let last = performance.now(), lastDraw = -1e9, failures = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  if (ts - lastDraw < 29) return;   // about 30 fps is plenty for pixel art and halves the work
+  lastDraw = ts;
+  try { drawFrame(ts); } catch (err) { if (failures++ < 3) console.error(err); sceneDirty = true; }   // keep going whatever happens
+}
+function drawFrame(ts) {
+  const dt = Math.min(100, ts - last); last = ts; step(dt);
+  const fresh = sceneDirty;   // after a colour change the whole still city is redrawn, then everything that moves on top
+  if (fresh) { drawScene(); sceneDirty = false; }
+  dirty.fill(0);
+  // everything that moves or blinks, where it is now, and whether it looks different from last frame
+  const moving = [];
+  let seq = ents.length;
+  cars.forEach((c, i) => { const gx = c.axis === 'x' ? c.t : c.lane, gy = c.axis === 'x' ? c.lane : c.t;
+    if (gx < 0 || gy < 0 || gx >= N || gy >= N) return seen('car' + i, null, 0, 0, 0, 0, fresh);
+    const s = carSprite(c.col, c.axis), [sx, sy] = iso(gx, gy), [bx, by] = iso(0, 0), ox = s.ox + sx - bx, oy = s.oy + sy - by, o = opaqueBounds(s.canvas);
+    moving.push({ id: 'car' + i, key: gx + gy + .6, seq: seq++, box: [ox + o[0], oy + o[1], o[2] - o[0], o[3] - o[1]], canvas: s.canvas, ox, oy }); });
+  people.forEach((p, i) => { const [sx, sy] = iso(p.x, p.y);
+    moving.push({ id: 'person' + i, key: p.x + p.y, seq: seq++, box: [sx, sy - 4, 1, 4], draw: () => { ctx.fillStyle = p.col; ctx.fillRect(sx, sy - 3, 1, 3); ctx.fillStyle = '#f1c9a5'; ctx.fillRect(sx, sy - 4, 1, 1); } }); });
   { const bx = lake.X0 + 8.4 + Math.sin(boat.t / 5000) * 2.4, by = lake.Y0 + 9.6, [sx, sy] = iso(bx, by);
-    list.push({ key: bx + by, draw: () => { ctx.fillStyle = '#f4f2fa'; ctx.fillRect(sx - 6, sy, 12, 2); ctx.fillStyle = '#c94f4f'; ctx.fillRect(sx - 5, sy + 2, 10, 1); ctx.fillStyle = '#d9d6ea'; ctx.fillRect(sx - 2, sy - 3, 5, 3); ctx.fillStyle = '#86b9dc'; ctx.fillRect(sx - 1, sy - 2, 3, 1); } }); }
-  list.sort((a, b) => a.key - b.key);
+    moving.push({ id: 'boat', key: bx + by, seq: seq++, box: [sx - 6, sy - 3, 12, 6], draw: () => { ctx.fillStyle = '#f4f2fa'; ctx.fillRect(sx - 6, sy, 12, 2); ctx.fillStyle = '#c94f4f'; ctx.fillRect(sx - 5, sy + 2, 10, 1); ctx.fillStyle = '#d9d6ea'; ctx.fillRect(sx - 2, sy - 3, 5, 3); ctx.fillStyle = '#86b9dc'; ctx.fillRect(sx - 1, sy - 2, 3, 1); } }); }
+  // a moving thing also looks different when it slips behind a sprite or overtakes another car without moving a pixel
+  const overlap = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+  moving.forEach(m => { const below = moving.filter(o => o !== m && overlap(o.box, m.box) && (o.key < m.key || (o.key === m.key && o.seq < m.seq))).map(o => o.id);
+    seen(m.id, m.box[0] + ',' + m.box[1] + ',' + depth(m.key) + ',' + below.join(), ...m.box, fresh); });
+  const ph = Math.floor(simT / 450), waveOn = w => !reduce && (ph + w.p) % 3 === 0;
+  waves.forEach((w, i) => seen('wave' + i, waveOn(w) ? '' : null, w.x, w.y, 3, 1, fresh));
+  const downBlocks = BLOCKS.filter(b => b.hub && hubDown(b.hub)), tint = tintAlpha();
+  downBlocks.forEach(b => b.tiles.forEach(([x, y], i) => { const [sx, sy] = iso(x, y); seen(b.hub + ':' + i, String(tint), sx - 8, sy, 16, 8, fresh); }));
+  // a blinking light's ring grows to 12 px from it (18 px on a hub tower)
+  const lit = nodes.filter(blinking).map(n => [n, false]).concat(hubs.filter(blinking).map(h => [h, true]));
+  lit.forEach(([n, big]) => { const q = pulse(n, big), r = big ? 19 : 13; seen(n.name, q.on + ',' + q.r + ',' + q.a, n.lx - r, n.ly - r, 2 * r + 1, 2 * r + 1, fresh); });
+  [['hover', hover && hover !== selected ? hover : null], ['selected', selected]].forEach(([id, t]) =>
+    seen(id, t ? t.name : null, t ? t.lx - 9 : 0, t ? t.ly - 9 : 0, 20, 20, fresh));
+  const drift = reduce ? 0 : Math.sin(simT / 9000) * 8, clouds = [[40 + drift, CH - 40], [CW - 50 - drift, 30], [CW * .72 + drift, CH - 26]];
+  clouds.forEach(([x, y], i) => seen('cloud' + i, String(Math.round(x)), x - 25, y - 18, 51, 35, fresh));
+  if (!dirty.includes(1)) return blit();   // nothing on the map looks different
+
+  // repaint the dirty tiles from the ground up, in the same back-to-front order as the still city
+  clipTo(i => dirty[i]);
+  ctx.drawImage(ground, 0, 0);
+  ctx.fillStyle = '#9dbdea'; waves.forEach(w => { if (waveOn(w) && touchesDirty(w.x, w.y, 3, 1)) ctx.fillRect(w.x, w.y, 3, 1); });
+  ctx.globalAlpha = tint;
+  downBlocks.forEach(b => b.tiles.forEach(([x, y]) => { const [sx, sy] = iso(x, y); if (touchesDirty(sx - 8, sy, 16, 8)) diamond(ctx, x, y, '#ff3050'); }));
+  ctx.globalAlpha = 1;
+  const list = moving.filter(m => touchesDirty(...m.box)); stamp++;
+  const take = e => { if (e.stamp !== stamp) { e.stamp = stamp; list.push(e); } };
+  for (let i = 0; i < dirty.length; i++) if (dirty[i]) entsAt[i].forEach(take);
+  lit.forEach(([n, big]) => { const r = big ? 19 : 13; if (touchesDirty(n.lx - r, n.ly - r, 2 * r + 1, 2 * r + 1)) take(n.ent); });   // rings reach past their mast
+  list.sort((a, b) => a.key - b.key || a.seq - b.seq);
   list.forEach(e => { if (e.draw) e.draw(); else ctx.drawImage(e.canvas, e.ox, e.oy);
     if (e.lights) e.lights.forEach(i => drawLight(nodes[i])); if (e.hubLight) drawLight(e.hubLight, true); });
   if (hover && hover !== selected) brackets(hover.lx, hover.ly, '#ffffff', hover.isHub);
   if (selected) brackets(selected.lx, selected.ly, C.gold, selected.isHub);
-  const drift = reduce ? 0 : Math.sin(simT / 9000) * 8;
-  cloud(40 + drift, CH - 40); cloud(CW - 50 - drift, 30); cloud(CW * .72 + drift, CH - 26);
+  clouds.forEach(([x, y]) => { if (touchesDirty(x - 25, y - 18, 51, 35)) cloud(x, y); });
+  ctx.restore();
   blit();
-  requestAnimationFrame(frame);
 }
 
 // ---------- view: integer pixel scaling in device pixels, zoom and pan ----------
 const V = { dpr: 1, k: 0, cx: CW / 2, cy: CH / 2, fit: 2, home: 2 };
-const mini = $('#mini'), mctx = mini.getContext('2d');
+const mini = $('#mini'), mctx = mini.getContext('2d', CPU);
 const toScreen = (wx, wy) => [Math.round(view.width / 2 + (wx - V.cx) * V.k), Math.round(view.height / 2 + (wy - V.cy) * V.k)];
 function fitK() { const kf = Math.min(view.width / CW, view.height / CH), kr = Math.round(kf);
   return kf < 1 ? kf : (kr - kf) / kf < .2 ? Math.max(1, kr) : Math.floor(kf); }
@@ -574,9 +705,13 @@ function clampView() {
 function sizeView() {
   V.dpr = window.devicePixelRatio || 1;
   const cssW = view.parentElement.clientWidth, cssH = view.parentElement.clientHeight;
-  view.width = Math.max(1, Math.round(cssW * V.dpr)); view.height = Math.max(1, Math.round(cssH * V.dpr));
+  // a canvas is cleared and reallocated whenever its size is set, so only set it when it changes
+  const w = Math.max(1, Math.round(cssW * V.dpr)), h = Math.max(1, Math.round(cssH * V.dpr));
+  if (view.width !== w || view.height !== h) { view.width = w; view.height = h; labelsKey = ''; }
   V.fit = fitK(); V.home = Math.max(V.fit, Math.round(1.6 * V.dpr)); if (!V.k) V.k = V.home; if (V.k < V.fit) V.k = V.fit; clampView();
-  const mw = mini.parentElement.clientWidth - 24; mini.width = Math.round(mw * V.dpr); mini.height = Math.round(mw * CH / CW * V.dpr); mini.style.height = Math.round(mw * CH / CW) + 'px';
+  const mw = Math.max(1, mini.parentElement.clientWidth - 24), mwd = Math.round(mw * V.dpr), mhd = Math.max(1, Math.round(mw * CH / CW * V.dpr)), mh = Math.round(mw * CH / CW) + 'px';
+  if (mini.width !== mwd || mini.height !== mhd) { mini.width = mwd; mini.height = mhd; miniKey = ''; }
+  if (mini.style.height !== mh) mini.style.height = mh;
 }
 function zoom(dir) {
   if (dir === 0) { V.k = V.fit; V.cx = CW / 2; V.cy = CH / 2; clampView(); return; }
@@ -585,11 +720,15 @@ function zoom(dir) {
   const i = steps.findIndex(v => v >= V.k - 1e-6); V.k = steps[Math.max(0, Math.min(steps.length - 1, i + dir))]; clampView();
 }
 { const ro = new ResizeObserver(sizeView); ro.observe(view.parentElement); ro.observe(mini.parentElement); } sizeView();
+// places the scaled city under the view; labels and the overview are redrawn only when they would look different
 function blit() {
-  vctx.imageSmoothingEnabled = false; vctx.fillStyle = '#57557d'; vctx.fillRect(0, 0, view.width, view.height);
-  const [x0, y0] = toScreen(0, 0); vctx.drawImage(cv, x0, y0, Math.round(CW * V.k), Math.round(CH * V.k));
-  if (fontOk) labels();
-  drawMini();
+  const [x0, y0] = toScreen(0, 0), k = V.k, d = V.dpr, key = [view.width, view.height, k, x0, y0, d].join();
+  if (key !== screenKey) { screenKey = key;
+    cv.style.width = CW * k / d + 'px'; cv.style.height = CH * k / d + 'px'; cv.style.transform = `translate(${x0 / d}px,${y0 / d}px)`; }
+  const lk = [key, [...hubsDownNow].sort().join(), fontOk].join('|');
+  if (lk !== labelsKey) { labelsKey = lk; vctx.clearRect(0, 0, view.width, view.height); if (fontOk) labels(); }
+  const mk = [key, mini.width, mini.height, stateVer].join('|');
+  if (mk !== miniKey) { miniKey = mk; drawMini(); }
 }
 function drawMini() {
   const s = mini.width / CW, d = Math.max(1, V.dpr);
@@ -643,6 +782,8 @@ async function loadHistory(name) {
   history = { name, rows: history.name === name ? history.rows : [], at: Date.now() };
   try { const r = await fetch('/api/site/' + encodeURIComponent(name)); if (r.ok && history.name === name) { history.rows = await r.json(); render(); } } catch (e) { /* keep the old rows */ }
 }
+// render() runs every second; leave the DOM alone when nothing in it would change
+const shown = new WeakMap(), setHTML = (el, html) => { if (shown.get(el) !== html) { shown.set(el, html); el.innerHTML = html; } };
 function render() {
   const live = $('#live'), fresh = Date.now() - lastMessage < 6000;
   if (!fresh) { live.textContent = '● OFFLINE · RECONNECTING'; live.className = 'live s-down'; live.title = 'No message from the map service in the last few seconds'; }
@@ -658,30 +799,30 @@ function render() {
   $('#cUp').textContent = up; $('#cDeg').textContent = dg; $('#cDown').textContent = dn;
   if (snapshot && snapshot.ok) {
     $('#nAlarms').textContent = snapshot.last_hour.alarms; $('#nInc').textContent = snapshot.last_hour.incidents;
-    $('#log').innerHTML = snapshot.feed.map(f => `<li><span class="t">${hhmmss(f.ts)}</span> <span class="${f.event === 'clear' ? 'sev-clear' : 'sev-' + f.severity}">${esc(f.node)} ${esc(f.alarm)} ${f.event === 'clear' ? 'cleared' : esc(f.severity)}</span></li>`).join('');
+    setHTML($('#log'), snapshot.feed.map(f => `<li><span class="t">${hhmmss(f.ts)}</span> <span class="${f.event === 'clear' ? 'sev-clear' : 'sev-' + f.severity}">${esc(f.node)} ${esc(f.alarm)} ${f.event === 'clear' ? 'cleared' : esc(f.severity)}</span></li>`).join(''));
   }
-  $('#incs').innerHTML = incidents.length ? incidents.map(i => `<li data-id="${i.id}" title="Show on the map"><span class="id">INC-${i.id}</span> ${esc(title(i.kind))}<br><span class="meta">${i.region} · ${i.hub} · ${i.site_count} site${i.site_count === 1 ? '' : 's'} · ${i.alarm_count} alarm${i.alarm_count === 1 ? '' : 's'} · ${age(i.age * 1000)}</span></li>`).join('')
-    : '<li class="meta">All clear.</li>';
+  setHTML($('#incs'), incidents.length ? incidents.map(i => `<li data-id="${i.id}" title="Show on the map"><span class="id">INC-${i.id}</span> ${esc(title(i.kind))}<br><span class="meta">${i.region} · ${i.hub} · ${i.site_count} site${i.site_count === 1 ? '' : 's'} · ${i.alarm_count} alarm${i.alarm_count === 1 ? '' : 's'} · ${age(i.age * 1000)}</span></li>`).join('')
+    : '<li class="meta">All clear.</li>');
   const site = $('#site'), X = '<button class="x" type="button" aria-label="Clear selection">×</button>';
-  if (!selected) { site.innerHTML = '<h2>Selected site</h2><div class="muted">Click any light on the map. The big lights on lattice towers are the 20 transport hubs. Drag to move; click an incident to jump to it.</div>'; return; }
+  if (!selected) { setHTML(site, '<h2>Selected site</h2><div class="muted">Click any light on the map. The big lights on lattice towers are the 20 transport hubs. Drag to move; click an incident to jump to it.</div>'); return; }
   if (selected.isHub) {
     const h = selected, dnH = hubDown(h.name), ns = nodes.filter(n => n.hub === h.name), down = ns.filter(n => eff(n) === 'down').length;
     const i = incidents.find(i => i.kind === 'TRANSPORT_LINK_DOWN' && i.root === h.name);
-    site.innerHTML = `${X}<h2>Selected hub</h2><div><span class="name">${h.name}</span><span class="pill s-${dnH ? 'down' : 'up'}">${dnH ? 'DOWN' : 'UP'}</span></div>
+    setHTML(site, `${X}<h2>Selected hub</h2><div><span class="name">${h.name}</span><span class="pill s-${dnH ? 'down' : 'up'}">${dnH ? 'DOWN' : 'UP'}</span></div>
       <p class="muted">${h.region} · transport hub · ${ns.length} sites behind it</p>
       <p>${down} of ${ns.length} sites down</p>
-      <p>${i ? `<span class="id">INC-${i.id}</span> ${esc(title(i.kind))}` : '<span class="muted">No open incident</span>'}</p>`;
+      <p>${i ? `<span class="id">INC-${i.id}</span> ${esc(title(i.kind))}` : '<span class="muted">No open incident</span>'}</p>`);
     return;
   }
   const n = selected, s = eff(n), inc = n.incident ? incidents.find(i => i.id === n.incident) : null;
   if (history.name !== n.name || Date.now() - history.at > 5000) loadHistory(n.name);
-  site.innerHTML = `${X}<h2>Selected site</h2><div><span class="name">${n.name}</span><span class="pill s-${s}">${s.toUpperCase()}</span></div>
+  setHTML(site, `${X}<h2>Selected site</h2><div><span class="name">${n.name}</span><span class="pill s-${s}">${s.toUpperCase()}</span></div>
     <p class="muted">${n.region} · ${n.hub} · ${esc(n.where)}</p>
     <p>${n.alarms.length ? 'Active: ' + n.alarms.map(a => `<span class="${a === 'NODE_DOWN' ? 'sev-critical' : 'sev-major'}">${esc(a)}</span>`).join(', ') : '<span class="muted">No active alarms</span>'}</p>
     <p>${n.incident ? `<span class="id">INC-${n.incident}</span> ${inc ? esc(title(inc.kind)) : ''}` : '<span class="muted">No open incident</span>'}</p>
-    ${history.name === n.name && history.rows.length ? '<ul class="log" style="min-height:0;margin-top:6px">' + history.rows.map(h => `<li><span class="t">${hhmmss(h.ts)}</span> <span class="${h.event === 'clear' ? 'sev-clear' : 'sev-' + h.severity}">${esc(h.alarm)}${h.event === 'clear' ? ' cleared' : ''}</span></li>`).join('') + '</ul>' : ''}`;
+    ${history.name === n.name && history.rows.length ? '<ul class="log" style="min-height:0;margin-top:6px">' + history.rows.map(h => `<li><span class="t">${hhmmss(h.ts)}</span> <span class="${h.event === 'clear' ? 'sev-clear' : 'sev-' + h.severity}">${esc(h.alarm)}${h.event === 'clear' ? ' cleared' : ''}</span></li>`).join('') + '</ul>' : ''}`);
 }
-setInterval(render, 1000); render();
+setInterval(() => { watchdog(); render(); }, 1000); render();
 })();
 </script>
 </html>
