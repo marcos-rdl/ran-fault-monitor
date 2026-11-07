@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAN Fault Monitor · City map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
+<style>
+/* Layout: fills the window like a console. Header with controls on top; map with the alarm feed under it on the left;
+   one side column whose incident list stretches to the bottom, so there is no empty space. Stacks on narrow screens. */
+:root{
+  --bg:#1c1a2e; --panel:#262440; --line:#3d3a63; --fg:#ece8ff; --dim:#a39fc9;
+  --up:#4fe08f; --warn:#ffb63a; --down:#ff5468; --accent:#9fd4ff; --gold:#ffe08a;
+  --display:"Press Start 2P", ui-monospace, "Courier New", monospace;
+  --mono:"VT323", ui-monospace, "Courier New", monospace;
+  color-scheme:dark;
+}
+html,body{background:var(--bg);color:var(--fg)}
+body{margin:0;font-family:var(--mono);font-size:20px;line-height:1.15;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px}
+.wrap{height:calc(100vh - 24px);height:calc(100dvh - 24px);min-height:600px;display:grid;gap:12px;
+  grid-template-columns:minmax(0,1fr) 330px;grid-template-rows:auto minmax(0,1fr) auto;
+  grid-template-areas:"head head" "map side" "feed side"}
+header{grid-area:head;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 20px}
+.titles{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px}
+h1{font-family:var(--display);font-size:clamp(13px,1.6vw,18px);margin:0;color:var(--accent);letter-spacing:.04em;text-wrap:balance}
+.tag{color:var(--dim)}
+.screen{grid-area:map;position:relative;min-height:0;border:4px solid var(--line);background:#57557d;box-shadow:0 0 0 2px #000,0 0 28px #9fd4ff22}
+#city{position:absolute;inset:0;display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+.bottom{grid-area:feed;display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px}
+.feed{display:flex;flex-direction:column}
+.feed .log{flex:1 1 0;min-height:calc(5 * 1.15em);overflow:hidden;column-fill:auto}
+.side{grid-area:side;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow-y:auto}
+.side .incbox{flex:1 0 140px;display:flex;flex-direction:column;min-height:140px}
+.incbox ul{flex:1;min-height:0;overflow-y:auto}
+@media (max-width:900px), (max-height:560px){
+  .wrap{display:flex;flex-direction:column;height:auto;min-height:0}
+  .bottom{grid-template-columns:minmax(0,1fr)} .feed .log{flex:none;columns:1;min-height:calc(10 * 1.15em)}
+  .screen{height:min(68vh,560px);min-height:300px}
+  .side{overflow:visible} .side .incbox{flex:none} .incbox ul{max-height:none}
+}
+.zoom{position:absolute;right:8px;bottom:8px;display:flex;gap:6px}
+.zoom button{padding:6px 9px;min-width:34px;font-size:11px}
+@media (max-width:600px){.zoom{right:4px;bottom:4px;gap:4px}.zoom button{padding:4px 6px;min-width:26px;font-size:9px}}
+#mini{display:block;width:100%;height:auto;cursor:pointer}
+.inc li[data-id]{cursor:pointer}.inc li[data-id]:hover{background:#2f2c4f}
+.site .x{float:right;margin:-4px -4px 0 8px;padding:2px 7px;font-size:9px;box-shadow:2px 2px 0 #000}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+button{font-family:var(--display);font-size:10px;line-height:1.4;background:var(--panel);color:var(--fg);border:2px solid var(--accent);padding:10px 12px;cursor:pointer;box-shadow:3px 3px 0 #000}
+button:hover{background:var(--line)}
+button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #000}
+button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.live{font-family:var(--display);font-size:10px;padding:8px 10px;border:2px solid currentColor}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--dim)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:6px}
+.box{background:var(--panel);border:2px solid var(--line);padding:10px 12px;min-width:0;margin:0}
+.how{margin-top:8px}
+.box h2{font-family:var(--display);font-size:9px;margin:0 0 10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase}
+.avail{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.big{font-family:var(--display);font-size:22px;font-variant-numeric:tabular-nums}
+.bar{display:grid;grid-template-columns:repeat(20,1fr);gap:2px;margin:8px 0 10px}
+.bar span{height:8px;background:var(--line)}
+.counts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;color:var(--dim)}
+.counts b{display:block;font-family:var(--display);font-size:13px;font-weight:400;margin-bottom:2px;font-variant-numeric:tabular-nums}
+.corr{margin-top:10px;color:var(--dim)} .corr b{color:var(--fg);font-weight:400}
+.pill{font-family:var(--display);font-size:8px;padding:3px 5px;border:2px solid currentColor;vertical-align:2px}
+.s-up{color:var(--up)} .s-degraded{color:var(--warn)} .s-down{color:var(--down)}
+.sev-critical{color:var(--down)} .sev-major{color:var(--warn)} .sev-minor{color:var(--gold)} .sev-clear{color:var(--up)}
+ul{list-style:none;margin:0;padding:0}
+.inc li{padding:4px 0;border-top:1px dashed var(--line)} .inc li:first-child{border-top:0}
+.id{color:var(--accent)} .meta{color:var(--dim)}
+.log{font-size:18px;min-height:calc(5 * 1.15em);columns:3 270px;column-gap:28px}
+.log li{break-inside:avoid}
+.site .log{columns:1}
+.log li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.log .t{color:var(--dim)}
+.site .name{font-family:var(--display);font-size:13px;margin-right:8px}
+.site p{margin:6px 0 0} .muted{color:var(--dim)}
+@media (prefers-reduced-motion: reduce){button:active{transform:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="titles">
+      <h1>RAN FAULT MONITOR · CITY VIEW</h1>
+      <span class="tag">Live from PostgreSQL over a WebSocket</span>
+    </div>
+    <div class="controls">
+      <span id="live" class="live s-degraded">● CONNECTING</span>
+      <span id="updated" class="tag"></span>
+      <div class="legend">
+        <span><i style="background:var(--up)"></i>Up</span>
+        <span><i style="background:var(--warn)"></i>Degraded</span>
+        <span><i style="background:var(--down)"></i>Down</span>
+      </div>
+    </div>
+  </header>
+  <div class="screen">
+    <canvas id="city" aria-label="Isometric pixel-art city with 500 cell sites and 20 transport hubs whose lights turn red when they go down"></canvas>
+    <div class="zoom">
+      <button id="zin" type="button" aria-label="Zoom in">+</button>
+      <button id="zout" type="button" aria-label="Zoom out">−</button>
+      <button id="zfit" type="button">All</button>
+    </div>
+  </div>
+  <div class="bottom">
+    <section class="box">
+      <h2>Network availability</h2>
+      <div class="avail"><span class="big" id="availPct">100%</span><span id="availSites" class="tag"></span></div>
+      <div class="bar" id="bar"></div>
+      <div class="counts">
+        <div><b class="s-up" id="cUp">0</b>UP</div>
+        <div><b class="s-degraded" id="cDeg">0</b>DEGRADED</div>
+        <div><b class="s-down" id="cDown">0</b>DOWN</div>
+      </div>
+      <div class="corr">1 h: <b id="nAlarms">0</b> alarms → <b id="nInc">0</b> incidents</div>
+    </section>
+    <section class="box feed"><h2>Alarm feed</h2><ul class="log" id="log"></ul></section>
+  </div>
+  <aside class="side">
+    <section class="box site" id="site"></section>
+    <section class="box"><h2>Overview · click to jump</h2><canvas id="mini" aria-label="Small overview of the whole city; click to move the main map there"></canvas></section>
+    <section class="box incbox"><h2>Active incidents</h2><ul class="inc" id="incs"></ul></section>
+  </aside>
+</div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const N = 69, OX = N * 8 + 16, OY = 70, CW = N * 16 + 32, CH = OY + N * 8 + 18;
+const cv = document.createElement('canvas'), ctx = cv.getContext('2d');
+cv.width = CW; cv.height = CH; ctx.imageSmoothingEnabled = false;
+const view = $('#city'), vctx = view.getContext('2d');
+const C = { up:'#4fe08f', warn:'#ffb63a', down:'#ff5468', gold:'#ffe08a' };
+
+let seed = 3112026;
+const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+const pick = a => a[Math.floor(rnd() * a.length)];
+const iso = (x, y) => [Math.round(OX + (x - y) * 8), Math.round(OY + (x + y) * 4)];
+
+// ---------- pixel helpers ----------
+function diamond(g, x, y, col) {
+  const [sx, sy] = iso(x, y); g.fillStyle = col;
+  for (let r = 0; r < 8; r++) { const h = r < 4 ? (r + 1) * 2 : (8 - r) * 2; g.fillRect(sx - h, sy + r, h * 2, 1); }
+}
+function line(g, x0, y0, x1, y1, col) {
+  g.fillStyle = col; x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1; let e = dx + dy;
+  for (;;) { g.fillRect(x0, y0, 1, 1); if (x0 === x1 && y0 === y1) break; const e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+}
+function blob(g, cx, cy, r, col) {
+  g.fillStyle = col;
+  for (let dy = -Math.floor(r); dy <= Math.floor(r); dy++) { const h = Math.floor(Math.sqrt(r * r - dy * dy)); g.fillRect(Math.round(cx) - h, Math.round(cy) + dy, h * 2 + 1, 1); }
+}
+const shade = (hex, f) => { const n = parseInt(hex.slice(1), 16); let r = n >> 16, gg = (n >> 8) & 255, b = n & 255;
+  const m = v => Math.max(0, Math.min(255, Math.round(f > 0 ? v + (255 - v) * f : v * (1 + f))));
+  return '#' + ((1 << 24) | (m(r) << 16) | (m(gg) << 8) | m(b)).toString(16).slice(1); };
+
+// box: footprint (x,y,w,d) in tiles, height h px, base elevation z px
+function box(g, x, y, w, d, h, z, top, opt = {}) {
+  const left = opt.left || shade(top, -0.18), right = opt.right || shade(top, -0.32);
+  const [Nx, Ny] = iso(x, y), [Ex, Ey] = iso(x + w, y), [Sx, Sy] = iso(x + w, y + d), [Wx, Wy] = iso(x, y + d);
+  for (let c = Wx; c < Sx; c++) { const b = Wy + Math.floor((c - Wx) / 2) - z; g.fillStyle = left; g.fillRect(c, b - h, 1, h); }
+  for (let c = Sx; c < Ex; c++) { const b = Sy - Math.floor((c - Sx) / 2) - z; g.fillStyle = right; g.fillRect(c, b - h, 1, h); }
+  if (opt.win && h > 7) windows(g, Wx, Wy, Sx, Sy, Ex, h, z, opt.win);
+  const rim = opt.rim || shade(top, 0.25);
+  for (let c = Wx; c < Ex; c++) {
+    const up = c < Nx ? Wy - Math.floor((c - Wx) / 2) : Ny + Math.floor((c - Nx) / 2);
+    const lo = c < Sx ? Wy + Math.floor((c - Wx) / 2) : Sy - Math.floor((c - Sx) / 2);
+    g.fillStyle = top; g.fillRect(c, up - h - z, 1, Math.max(1, lo - up));
+    g.fillStyle = rim; g.fillRect(c, up - h - z, 1, 1);
+  }
+  g.fillStyle = shade(left, 0.12); g.fillRect(Sx, Sy - h - z, 1, h);
+  return { Nx, Ny, Ex, Ey, Sx, Sy, Wx, Wy };
+}
+function windows(g, Wx, Wy, Sx, Sy, Ex, h, z, style) {
+  const lit = style.lit ?? .2, glass = style.glass || '#7fb3d6', dark = style.dark || '#4b5a86', band = style.band;
+  const face = (x0, x1, yAt) => {
+    for (let row = 4; row < h - 3; row += style.rowStep || 5) {
+      for (let c = x0 + 2; c < x1 - 2; c += band ? 1 : 3) {
+        if (band && (c - x0) % 5 === 0) continue;
+        const col = rnd() < lit ? C.gold : (rnd() < .5 ? glass : dark);
+        for (let k = 0; k < (band ? 1 : 2) && c + k < x1 - 2; k++) { g.fillStyle = band ? glass : col; g.fillRect(c + k, yAt(c + k) - h - z + row, 1, band ? 3 : 2); }
+      }
+    }
+  };
+  face(Wx, Sx, c => Wy + Math.floor((c - Wx) / 2));
+  face(Sx, Ex, c => Sy - Math.floor((c - Sx) / 2));
+}
+function mast(g, px, py, tall) {
+  const h = tall ? 16 : 11;
+  g.fillStyle = '#5d5b78'; g.fillRect(px, py - h, 1, h);
+  g.fillStyle = '#8f8cab'; g.fillRect(px - 1, py - h + 3, 3, 1); g.fillRect(px - 1, py - 4, 3, 1);
+  g.fillStyle = '#e9e7f5'; g.fillRect(px - 3, py - h + 1, 2, 4); g.fillRect(px + 2, py - h + 1, 2, 4);
+  g.fillStyle = '#b8b5cf'; g.fillRect(px - 3, py - h + 4, 2, 1); g.fillRect(px + 2, py - h + 4, 2, 1);
+  return [px, py - h - 2];
+}
+function sprite(x, y, w, d, hTop, fn) {
+  const minX = iso(x, y + d)[0] - 6, maxX = iso(x + w, y)[0] + 6, minY = iso(x, y)[1] - hTop - 24, maxY = iso(x + w, y + d)[1] + 6;
+  const c = document.createElement('canvas'); c.width = maxX - minX; c.height = maxY - minY;
+  const g = c.getContext('2d'); g.translate(-minX, -minY); const out = fn(g) || {};
+  return { canvas: c, ox: minX, oy: minY, ...out };
+}
+
+// ---------- the map: 5 x 5 blocks of 13 x 13 tiles with roads between ----------
+// Same network as simulator.py: 5 regions x 4 hubs x 25 sites = 500 gNBs.
+// One block per hub, so a hub failure lights up a whole neighbourhood.
+const BS = 13, ST = BS + 1, RX = [13, 27, 41, 55], RY = RX;
+const REGIONS = ['NORTH', 'SOUTH', 'EAST', 'WEST', 'CENTRAL'];
+const LAYOUT = [            // LAYOUT[by][bx]; x runs down-right on screen, y runs down-left
+  ['NORTH', 'NORTH', 'PARK', 'EAST', 'EAST'],
+  ['NORTH', 'NORTH', 'CENTRAL', 'EAST', 'EAST'],
+  ['PARK', 'CENTRAL', 'PLAZA', 'CENTRAL', 'PARK'],
+  ['WEST', 'WEST', 'CENTRAL', 'SOUTH', 'SOUTH'],
+  ['WEST', 'WEST', 'LAKE', 'SOUTH', 'SOUTH'],
+];
+const BLOCKS = [], hubSeq = {};
+for (let by = 0; by < 5; by++) for (let bx = 0; bx < 5; bx++) {
+  const kind = LAYOUT[by][bx], region = REGIONS.includes(kind) ? kind : null;
+  let hub = null, hubNo = 0; if (region) { hubNo = hubSeq[region] = (hubSeq[region] || 0) + 1; hub = `HUB-${region[0]}${hubNo}`; }
+  BLOCKS.push({ bx, by, X0: bx * ST, Y0: by * ST, kind, region, hub, hubNo, spots: [], tiles: [] });
+}
+const inMap = (x, y) => x >= 0 && y >= 0 && x < N && y < N;
+const isRoad = (x, y) => inMap(x, y) && (RX.includes(x) || RY.includes(y));
+const blockOf = (x, y) => (inMap(x, y) && !isRoad(x, y)) ? BLOCKS[Math.floor(y / ST) * 5 + Math.floor(x / ST)] : null;
+const local = (b, x, y) => [x - b.X0, y - b.Y0];
+const isPier = (x, y) => { const b = blockOf(x, y); if (!b || b.kind !== 'LAKE') return false; const [lx, ly] = local(b, x, y); return lx === 6 && ly >= 1 && ly <= 5; };
+const isWater = (x, y) => { const b = blockOf(x, y); if (!b || b.kind !== 'LAKE') return false; const [lx, ly] = local(b, x, y); return lx >= 1 && lx <= BS - 2 && ly >= 1 && !isPier(x, y); };
+const occ = Array.from({length: N}, () => Array(N).fill(0));
+const sidewalk = (x, y) => inMap(x, y) && !isRoad(x, y) && !isWater(x, y) && [[1,0],[-1,0],[0,1],[0,-1]].some(([a, b]) => isRoad(x + a, y + b));
+const free = (x, y) => inMap(x, y) && !occ[y][x] && !isRoad(x, y) && !isWater(x, y) && !isPier(x, y) && !sidewalk(x, y);
+const areaFree = (x, y, w, d) => { for (let j = y; j < y + d; j++) for (let i = x; i < x + w; i++) if (!free(i, j)) return false; return true; };
+const take = (x, y, w, d, v = 1) => { for (let j = y; j < y + d; j++) for (let i = x; i < x + w; i++) occ[j][i] = v; };
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const fields = [];
+const inField = (x, y) => fields.some(f => x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.d);
+BLOCKS.forEach(b => { for (let y = b.Y0; y < b.Y0 + BS; y++) for (let x = b.X0; x < b.X0 + BS; x++) if (inMap(x, y) && !isWater(x, y)) b.tiles.push([x, y]); });
+// sports field in the second university block
+{ const b = BLOCKS.find(b => b.hub === 'HUB-W2'); fields.push({ x: b.X0 + 1, y: b.Y0 + 1, w: 9, d: 5 }); }
+
+// ---------- ground ----------
+const ground = document.createElement('canvas'); ground.width = CW; ground.height = CH;
+const gg = ground.getContext('2d'); gg.imageSmoothingEnabled = false;
+gg.fillStyle = '#57557d'; gg.fillRect(0, 0, CW, CH);
+const GRASS = ['#6f9b52', '#79a65a', '#68924c'];
+const PAVE = { EAST: '#bdb9cf', SOUTH: '#aaa8b9', CENTRAL: '#c3bfd3', PLAZA: '#cdc9dc' };
+for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+  if (isRoad(x, y)) {
+    diamond(gg, x, y, '#7c7898');
+    const hz = RY.includes(y), vt = RX.includes(x);
+    if (hz && !vt) { const [a, b] = iso(x + .25, y + .5), [c2, d2] = iso(x + .6, y + .5); line(gg, a, b, c2, d2, '#d7d4e8'); }
+    if (vt && !hz) { const [a, b] = iso(x + .5, y + .25), [c2, d2] = iso(x + .5, y + .6); line(gg, a, b, c2, d2, '#d7d4e8'); }
+    continue;
+  }
+  const b = blockOf(x, y);
+  if (isWater(x, y)) { const edge = !isWater(x - 1, y) || !isWater(x, y - 1); diamond(gg, x, y, edge ? '#7aa3d8' : '#5c82c4'); continue; }
+  if (isPier(x, y)) { diamond(gg, x, y, '#9a7656'); continue; }
+  if (sidewalk(x, y)) { diamond(gg, x, y, '#c9c5db'); continue; }
+  if (inField(x, y)) { diamond(gg, x, y, (x + y) % 2 ? '#5fae5a' : '#67b862'); continue; }
+  diamond(gg, x, y, PAVE[b.kind] || pick(GRASS));
+}
+fields.forEach(f => { const L = '#eef3e8';
+  const [a, b] = iso(f.x, f.y), [c2, d2] = iso(f.x + f.w, f.y), [e, g2] = iso(f.x + f.w, f.y + f.d), [h, i] = iso(f.x, f.y + f.d);
+  line(gg, a, b + 4, c2, d2 + 4, L); line(gg, c2, d2 + 4, e, g2 + 4, L); line(gg, e, g2 + 4, h, i + 4, L); line(gg, h, i + 4, a, b + 4, L);
+  const [m1, n1] = iso(f.x + f.w / 2, f.y), [m2, n2] = iso(f.x + f.w / 2, f.y + f.d); line(gg, m1, n1 + 4, m2, n2 + 4, L); });
+const waves = [];
+for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (isWater(x, y) && rnd() < .7) { const [sx, sy] = iso(x, y); waves.push({ x: sx - 3 + ri(0, 6), y: sy + ri(2, 5), p: ri(0, 2) }); }
+
+// ---------- buildings and props ----------
+const ents = [];
+const add = (key, spr) => { const e = { key, ...spr }; ents.push(e); return e; };
+const roof = (b, e, px, py, tall, kind) => b.spots.push({ e, px, py, tall, kind });
+const PASTEL = ['#f2c7c7', '#cfe6d6', '#f3e3bf', '#d9d1f0', '#c8dff0'];
+const ROOFS = ['#8f5f7a', '#4f8a8b', '#b86b5a', '#6a6fa8', '#5d8b5f'];
+function house(b, x, y) {
+  const wall = pick(PASTEL), rc = pick(ROOFS), h = ri(7, 9); take(x, y, 2, 2);
+  const e = add(x + y + 2, sprite(x, y, 2, 2, h + 10, g => {
+    box(g, x + .2, y + .2, 1.6, 1.6, h, 0, shade(wall, .1), { left: wall, right: shade(wall, -.15), win: { lit: .25, rowStep: 9 } });
+    for (let k = 0; k < 3; k++) { const i = .1 + k * .25; box(g, x + i, y + i, 2 - 2 * i, 2 - 2 * i, 2, h + k * 2, shade(rc, k * .08), { left: rc, right: shade(rc, -.25) }); }
+  }));
+  if (rnd() < .6) { const [px, py] = iso(x + 1, y + 1); roof(b, e, px, py - h - 7, false, 'a house roof'); }
+}
+function office(b, x, y, w, d, hMin = 26, hMax = 58) {
+  const tones = ['#c9d3e6', '#d8d2c4', '#b9c7dc', '#e2dccd'], top = pick(tones), h = ri(hMin, hMax); take(x, y, w, d);
+  const e = add(x + y + (w + d) / 2 + .5, sprite(x, y, w, d, h + 16, g => {
+    box(g, x, y, w, d, h, 0, shade(top, .05), { left: shade(top, -.1), right: shade(top, -.28), win: { lit: .18, glass: '#86b9dc', dark: '#556a96' } });
+    box(g, x + .15, y + .15, w - .3, d - .3, 1, h, '#a9a6bf', { left: '#8d8aa6', right: '#7a7794' });
+    if (rnd() < .6) box(g, x + .3, y + .3, 1.1, .7, 1, h + 1, '#3f5a9e', { left: '#2f4579', right: '#263a68', rim: '#6c8bd0' });
+    box(g, x + w - .8, y + .3, .45, .45, 3, h + 1, '#d9d7e6');
+  }));
+  [[.6, .6], [w - .6, .6], [.6, d - .6], [w - .6, d - .6]].forEach(([u, v], i) => { if (i < 3 || rnd() < .5) { const [px, py] = iso(x + u, y + v); roof(b, e, px, py - h - 1, true, 'an office tower roof'); } });
+}
+function apartment(b, x, y, w, d) {
+  const wall = pick(['#e7cdb8', '#d9c6e0', '#cbdcc9', '#f0dcae']), h = ri(16, 24); take(x, y, w, d);
+  const e = add(x + y + (w + d) / 2 + .5, sprite(x, y, w, d, h + 14, g => {
+    box(g, x + .1, y + .1, w - .2, d - .2, h, 0, '#b9b5cc', { left: wall, right: shade(wall, -.22), rim: '#d6d3e4', win: { lit: .3, rowStep: 5, glass: '#8fb7d8', dark: '#5b6790' } });
+    box(g, x + .5, y + .5, .5, .5, 3, h, '#d4d1e2');
+  }));
+  [[w / 2, d / 2]].concat(w > 2 ? [[.7, .7]] : []).forEach(([u, v]) => { const [px, py] = iso(x + u, y + v); roof(b, e, px, py - h - 1, true, 'an apartment block roof'); });
+}
+function campusPart(b, x, y, w, d, h, extra) {
+  const wall = '#ecdcbc'; take(x, y, w, d);
+  const e = add(x + y + (w + d) / 2, sprite(x, y, w, d, h + 14, g => {
+    box(g, x, y, w, d, h, 0, '#d9d6e6', { left: wall, right: shade(wall, -.2), rim: '#f4f2fa', win: { band: true, glass: '#79acd0' } });
+    box(g, x + .2, y + .2, Math.min(2, w - .4), .8, 1, h, '#3f5a9e', { left: '#2f4579', right: '#263a68', rim: '#6c8bd0' });
+    if (extra) box(g, x + w - 1.2, y + .3, .8, .8, 6, h, '#e9dcc4');
+  }));
+  for (let t = 1; t < Math.max(w, d); t += 2) { const [px, py] = w >= d ? iso(x + t + .3, y + d / 2) : iso(x + w / 2, y + t + .3); roof(b, e, px, py - h - 1, false, 'a university roof'); }
+}
+function gym(b, x, y, w, d) {
+  take(x, y, w, d);
+  const e = add(x + y + (w + d) / 2, sprite(x, y, w, d, 26, g => box(g, x, y, w, d, 12, 0, '#cfd4e2', { left: '#e4d6bd', right: '#c2b49b', win: { lit: .1, rowStep: 6 } })));
+  [1.2, w - 1.2].forEach(u => { const [px, py] = iso(x + u, y + d / 2); roof(b, e, px, py - 13, false, 'the sports hall roof'); });
+}
+function warehouse(b, x, y, w, d) {
+  const top = pick(['#c9ced8', '#b8c4cc', '#d3c9c0']), h = ri(9, 11); take(x, y, w, d);
+  const e = add(x + y + (w + d) / 2, sprite(x, y, w, d, h + 16, g => {
+    box(g, x, y, w, d, h, 0, top, { left: '#9fb0b8', right: '#83939c' });
+    for (let t = .25; t < w; t += .25) { const [a, c] = iso(x + t, y), [c2, d2] = iso(x + t, y + d); line(g, a, c - h, c2, d2 - h, shade(top, -.12)); }
+    const [dx, dy] = iso(x + .5, y + d); g.fillStyle = '#5a6870'; g.fillRect(dx + 2, dy - 8, 6, 7);
+  }));
+  [[.7, d / 2], [w - .7, d / 2]].forEach(([u, v]) => { const [px, py] = iso(x + u, y + v); roof(b, e, px, py - h, false, 'a warehouse roof'); });
+}
+function tree(x, y, kind) {
+  const [sx, sy] = iso(x + .5, y + .5); occ[y][x] = 2;
+  add(x + y + 1, sprite(x, y, 1, 1, 22, g => {
+    g.fillStyle = 'rgba(30,25,60,.25)'; g.fillRect(sx - 3, sy + 1, 7, 2);
+    if (kind === 'pine') {
+      g.fillStyle = '#5b3d2e'; g.fillRect(sx, sy - 2, 1, 3);
+      for (let i = 0; i < 5; i++) { const w = 6 - i; g.fillStyle = i % 2 ? '#2f7a45' : '#24653a'; g.fillRect(sx - w, sy - 4 - i * 3, w * 2 + 1, 3); }
+      g.fillStyle = '#3f9257'; g.fillRect(sx - 1, sy - 18, 2, 3);
+    } else {
+      const c1 = kind === 'cherry' ? '#e9a6c4' : '#2f7a45', c2 = kind === 'cherry' ? '#f8cfe1' : '#4a9a58';
+      g.fillStyle = '#5b3d2e'; g.fillRect(sx, sy - 4, 1, 5);
+      blob(g, sx, sy - 8, 5, shade(c1, -.12)); blob(g, sx - 1, sy - 9, 4, c1); blob(g, sx - 2, sy - 11, 2, c2);
+    }
+  }));
+}
+const anyTree = () => rnd() < .25 ? 'cherry' : rnd() < .5 ? 'pine' : 'round';
+function containers(x, y) {
+  const cols = ['#d0573f', '#3f78c9', '#e3a03c', '#4f9a62', '#8a64b8']; occ[y][x] = 2;
+  add(x + y + 1, sprite(x, y, 1, 1, 12, g => {
+    box(g, x + .1, y + .15, .8, .35, 4, 0, pick(cols)); box(g, x + .1, y + .55, .8, .35, 4, 0, pick(cols));
+    if (rnd() < .5) box(g, x + .1, y + .15, .8, .35, 4, 4, pick(cols));
+  }));
+}
+function fountain(x, y) {
+  take(x, y, 2, 2, 2);
+  add(x + y + 2, sprite(x, y, 2, 2, 14, g => {
+    box(g, x + .2, y + .2, 1.6, 1.6, 2, 0, '#d4d1e2', { left: '#b3afc8', right: '#9d99b4' });
+    box(g, x + .4, y + .4, 1.2, 1.2, 1, 1, '#6f9fe0', { left: '#b3afc8', right: '#9d99b4', rim: '#9cc4f2' });
+    const [px, py] = iso(x + 1, y + 1); g.fillStyle = '#d4d1e2'; g.fillRect(px - 1, py - 8, 2, 6); g.fillStyle = '#cfe6ff'; g.fillRect(px - 1, py - 11, 2, 3); g.fillRect(px - 3, py - 9, 1, 2); g.fillRect(px + 2, py - 9, 1, 2);
+  }));
+}
+// the transport hub: a small exchange building with a lattice tower; its light is the hub's status
+const hubs = [];
+function hubBuilding(b, x, y) {
+  take(x, y, 2, 2); let light;
+  const e = add(x + y + 2.2, sprite(x, y, 2, 2, 44, g => {
+    box(g, x + .1, y + .1, 1.8, 1.8, 8, 0, '#9d9ab3', { left: '#8a8aa0', right: '#74748b', rim: '#c4c1d6' });
+    const [dx, dy] = iso(x + .6, y + 1.9); g.fillStyle = '#ffb63a'; g.fillRect(dx + 1, dy - 7, 4, 1);
+    const [px, py0] = iso(x + 1, y + 1), py = py0 - 8, H = 30;
+    for (let i = 0; i < H; i++) { const s = Math.round((H - i) / H * 4); g.fillStyle = '#c8c5da'; g.fillRect(px - s, py - i, 1, 1); g.fillRect(px + s, py - i, 1, 1); if (i % 5 === 0) { g.fillStyle = '#9693b0'; g.fillRect(px - s, py - i, s * 2 + 1, 1); } }
+    g.fillStyle = '#e9e7f5'; g.fillRect(px - 4, py - 22, 2, 4); g.fillRect(px + 3, py - 22, 2, 4); g.fillRect(px - 1, py - 16, 3, 3);
+    g.fillStyle = '#c94f4f'; g.fillRect(px, py - H - 1, 1, 2);
+    light = [px, py - H - 4];
+  }));
+  const hub = { isHub: true, name: b.hub, region: b.region, b, lx: light[0], ly: light[1], phase: Math.floor(rnd() * 1200) };
+  e.hubLight = hub; hubs.push(hub); b.hubObj = hub;
+}
+
+// one generator per kind of block; coordinates are local to the block (0..12, 0 and 12 are sidewalks)
+const SLOTS3 = [[1, 1], [5, 1], [9, 1], [1, 5], [5, 5], [9, 5], [1, 9], [5, 9], [9, 9]];
+const GEN = {
+  NORTH(b) { const X = b.X0, Y = b.Y0; hubBuilding(b, X + 7, Y + 7);
+    [1, 4, 7, 10].forEach(v => [1, 4, 7, 10].forEach(u => { if (rnd() < .7 && areaFree(X + u, Y + v, 2, 2)) house(b, X + u, Y + v); })); },
+  EAST(b) { const X = b.X0, Y = b.Y0, s = shuffle(SLOTS3.slice()); hubBuilding(b, X + s[0][0] + 1, Y + s[0][1] + 1);
+    s.slice(1, 6).forEach(([u, v]) => office(b, X + u, Y + v, 3, 3)); },
+  CENTRAL(b) { const X = b.X0, Y = b.Y0, s = shuffle(SLOTS3.slice()); hubBuilding(b, X + s[0][0] + 1, Y + s[0][1] + 1);
+    s.slice(1, 3).forEach(([u, v]) => office(b, X + u, Y + v, 3, 3, 22, 40));
+    s.slice(3, 6).forEach(([u, v]) => rnd() < .5 ? apartment(b, X + u, Y + v, 3, 2) : apartment(b, X + u + 1, Y + v + 1, 2, 2)); },
+  WEST(b) {
+    const X = b.X0, Y = b.Y0;
+    if (b.hubNo === 2) { gym(b, X + 1, Y + 8, 6, 3); hubBuilding(b, X + 9, Y + 9); return; }
+    if (b.hubNo === 3) { campusPart(b, X + 1, Y + 1, 5, 5, 22, true); apartment(b, X + 8, Y + 1, 3, 2); apartment(b, X + 8, Y + 5, 3, 2); campusPart(b, X + 1, Y + 8, 5, 3, 14); hubBuilding(b, X + 9, Y + 9); return; }
+    campusPart(b, X + 1, Y + 1, 11, 2, 20, true); campusPart(b, X + 1, Y + 3, 2, 5, 17); campusPart(b, X + 10, Y + 3, 2, 5, 17); hubBuilding(b, X + 5, Y + 9);
+    for (let y = Y + 4; y < Y + 8; y++) for (let x = X + 4; x < X + 9; x++) if (free(x, y) && rnd() < .3) tree(x, y, 'cherry');
+  },
+  SOUTH(b) { const X = b.X0, Y = b.Y0; [[1, 1], [7, 1], [1, 5], [7, 5]].forEach(([u, v]) => warehouse(b, X + u, Y + v, 4, 2)); warehouse(b, X + 1, Y + 9, 3, 2); hubBuilding(b, X + 9, Y + 9); },
+  PLAZA(b) { fountain(b.X0 + 5, b.Y0 + 5); for (const [x, y] of b.tiles) if (free(x, y)) { const [lx, ly] = local(b, x, y); if ((lx === 1 || lx === BS - 2 || ly === 1 || ly === BS - 2) && (lx + ly) % 2 === 0) tree(x, y, 'cherry'); else if ((lx === 3 || lx === 9) && (ly === 3 || ly === 9)) tree(x, y, 'round'); } },
+  PARK(b) { for (const [x, y] of b.tiles) if (free(x, y) && rnd() < .45) tree(x, y, rnd() < .5 ? 'pine' : rnd() < .5 ? 'round' : 'cherry'); },
+  LAKE() {},
+};
+BLOCKS.forEach(b => GEN[b.kind](b));
+
+// ---------- cell sites: exactly 25 per hub block, numbered like simulator.py ----------
+function smallCell(g, px, py) { // small cell on a street pole
+  g.fillStyle = '#6d6a88'; g.fillRect(px, py - 10, 1, 10); g.fillStyle = '#8c88a6'; g.fillRect(px - 1, py - 1, 3, 1);
+  g.fillStyle = '#e9e7f5'; g.fillRect(px - 1, py - 10, 3, 3); g.fillStyle = '#b8b5cf'; g.fillRect(px - 1, py - 8, 3, 1);
+  return [px, py - 12];
+}
+function poleSprite(x, y, standalone) {
+  const [sx, sy] = iso(x + .5, y + .5); let light;
+  const e = add(x + y + 1, sprite(x, y, 1, 1, 26, g => {
+    if (standalone) { g.fillStyle = '#8c88a6'; g.fillRect(sx - 2, sy - 1, 5, 2); light = mast(g, sx, sy - 1, true); }
+    else light = smallCell(g, sx, sy);
+  }));
+  occ[y][x] = 4; return { e, light };
+}
+const nodes = new Array(500);
+BLOCKS.filter(b => b.hub).forEach(b => {
+  const masts = [];
+  const far = (lx, ly, D) => masts.every(m => { const dx = m.lx - lx, dy = (m.ly - ly) * 1.6; return dx * dx + dy * dy >= D * D; });
+  for (const sp of shuffle(b.spots)) { if (masts.length >= 10) break; const ly0 = sp.py - (sp.tall ? 16 : 11) - 2; if (!far(sp.px, ly0, 16)) continue;
+    const g = sp.e.canvas.getContext('2d'); g.setTransform(1, 0, 0, 1, -sp.e.ox, -sp.e.oy);
+    const [lx, ly] = mast(g, sp.px, sp.py, sp.tall); masts.push({ e: sp.e, lx, ly, where: 'mast on ' + sp.kind }); }
+  const cands = shuffle(b.tiles.filter(([x, y]) => (free(x, y) && !inField(x, y)) || (sidewalk(x, y) && !occ[y][x])).map(([x, y]) => ({ x, y, pole: sidewalk(x, y) })));
+  for (const D of [44, 36, 28, 20, 12, 0]) for (const c of cands) {
+    if (masts.length >= 25) break;
+    if (occ[c.y][c.x] || (!c.pole && !free(c.x, c.y))) continue;
+    const [sx, sy] = iso(c.x + .5, c.y + .5), ly0 = c.pole ? sy - 12 : sy - 19; if (!far(sx, ly0, D)) continue;
+    const { e, light } = poleSprite(c.x, c.y, !c.pole); masts.push({ e, lx: light[0], ly: light[1], where: c.pole ? 'small cell on a street pole' : 'standalone mast' });
+  }
+  masts.sort((p, q) => p.ly - q.ly || p.lx - q.lx);
+  const base = REGIONS.indexOf(b.region) * 100 + (b.hubNo - 1) * 25;
+  masts.forEach((m, k) => { const i = base + k;
+    nodes[i] = { name: 'gNB-' + String(i).padStart(4, '0'), region: b.region, hub: b.hub, b, lx: m.lx, ly: m.ly, where: m.where,
+      state: 'up', busy: false, storm: false, inc: null, hist: [], phase: Math.floor(rnd() * 1200) };
+    (m.e.lights = m.e.lights || []).push(i); });
+  b.siteCount = masts.length;
+});
+// trees and containers on what is left
+BLOCKS.forEach(b => { const p = { NORTH: .5, EAST: .25, CENTRAL: .35, WEST: .4 }[b.kind] || 0;
+  for (const [x, y] of b.tiles) { if (!free(x, y) || inField(x, y)) continue;
+    if (b.kind === 'SOUTH') { if (rnd() < .55) containers(x, y); } else if (rnd() < p) tree(x, y, anyTree()); } });
+
+// ---------- moving things ----------
+const CARS = ['#e8605a', '#f2c94c', '#f4f2fa', '#5aa0e8', '#9b6fd6', '#5fc28c'];
+const carSprites = {};
+function carSprite(col, axis) {
+  const k = col + axis; if (carSprites[k]) return carSprites[k];
+  const w = axis === 'x' ? .7 : .38, d = axis === 'x' ? .38 : .7;
+  const s = sprite(0, 0, 1, 1, 8, g => { box(g, 0, 0, w, d, 3, 0, shade(col, .1), { left: col, right: shade(col, -.25) }); box(g, w * .25, d * .25, w * .5, d * .5, 2, 3, '#cfe3f2', { left: '#9cc0dc', right: '#86a9c6' }); });
+  return carSprites[k] = s;
+}
+const cars = [];
+for (let i = 0; i < 52; i++) {
+  const axis = rnd() < .5 ? 'x' : 'y', lane = axis === 'x' ? pick(RY) : pick(RX), dir = rnd() < .5 ? 1 : -1;
+  cars.push({ axis, lane: lane + (dir > 0 ? .3 : .6), dir, t: rnd() * N, v: .0012 + rnd() * .0012, col: pick(CARS) });
+}
+const walkBlocks = BLOCKS.filter(b => ['PLAZA', 'PARK', 'WEST'].includes(b.kind));
+const people = Array.from({length: 70}, () => { const b = pick(walkBlocks);
+  return { b, x: b.X0 + 1 + rnd() * (BS - 2), y: b.Y0 + 1 + rnd() * (BS - 2), a: rnd() * 6.28, col: pick(['#3b3a5a', '#2d4a7a', '#7a2d4a', '#f4f2fa']) }; });
+const lake = BLOCKS.find(b => b.kind === 'LAKE'), boat = { t: 0 };
+
+// ---------- live state, pushed by the map service every 2 seconds ----------
+let simT = 0, snapshot = null, lastMessage = 0, hubsDownNow = new Set(), incidents = [];
+const nodeByName = {}, hubByName = {};
+nodes.forEach(n => nodeByName[n.name] = n); hubs.forEach(h => hubByName[h.name] = h);
+nodes.forEach(n => { n.alarms = []; n.incident = null; });
+const eff = n => n.state;
+const hubDown = h => hubsDownNow.has(h);
+const TITLES = { TRANSPORT_LINK_DOWN: 'Hub failure', NODE_DOWN: 'Site down', POWER_FAILURE: 'Power failure', LINK_FLAP: 'Link flapping', HIGH_TEMPERATURE: 'High temperature' };
+const title = kind => TITLES[kind] || kind;
+const hhmmss = iso => new Date(iso).toLocaleTimeString([], { hour12: false });
+function apply(s) {
+  snapshot = s; lastMessage = Date.now();
+  if (s.ok) {
+    nodes.forEach(n => { const x = s.sites[n.name]; n.state = x ? x.state : 'up'; n.alarms = x ? x.alarms : []; n.incident = x ? x.incident : null; });
+    hubsDownNow = new Set(s.hubs_down); incidents = s.incidents;
+  }
+  render();
+}
+let socket;
+function connect() {
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  socket.onmessage = e => apply(JSON.parse(e.data));
+  socket.onclose = () => setTimeout(connect, 2000);
+}
+connect();
+function walkable(x, y) { return inMap(x, y) && !isRoad(x, y) && !isWater(x, y) && !occ[Math.floor(y)][Math.floor(x)]; }
+function step(dt) {
+  simT += dt;
+  if (reduce) return;
+  cars.forEach(c => { c.t += c.dir * c.v * dt; if (c.t < -1) c.t += N + 2; if (c.t > N + 1) c.t -= N + 2; });
+  people.forEach(p => { p.a += (Math.random() - .5) * .3; const nx = p.x + Math.cos(p.a) * .0006 * dt, ny = p.y + Math.sin(p.a) * .0006 * dt;
+    const ok = nx > p.b.X0 + .5 && nx < p.b.X0 + BS - .5 && ny > p.b.Y0 + .5 && ny < p.b.Y0 + BS - .5 && walkable(Math.floor(nx), Math.floor(ny));
+    if (ok) { p.x = nx; p.y = ny; } else p.a += Math.PI; });
+  boat.t += dt;
+}
+
+// ---------- rendering ----------
+let hover = null, selected = null;
+function drawLight(n, big) {
+  const st = n.isHub ? (hubDown(n.name) ? 'down' : 'up') : eff(n), col = st === 'up' ? C.up : st === 'degraded' ? C.warn : C.down, { lx, ly } = n;
+  let on = true;
+  if (st === 'down' && !reduce) {
+    on = Math.floor((simT + n.phase) / 300) % 2 === 0;
+    const p = ((simT + n.phase) % 1200) / 1200, r = Math.round((big ? 4 : 3) + p * (big ? 14 : 9));
+    ctx.strokeStyle = `rgba(255,84,104,${(1 - p).toFixed(2)})`; ctx.lineWidth = 1; ctx.strokeRect(lx - r + .5, ly - r + .5, r * 2, r * 2);
+  }
+  const s = big ? 2 : 1;
+  if (on) { ctx.fillStyle = col + '66'; ctx.fillRect(lx - 1 - s, ly - 1 - s, 3 + 2 * s, 3 + 2 * s); ctx.fillStyle = col; ctx.fillRect(lx - s, ly - s, 1 + 2 * s, 1 + 2 * s); ctx.fillStyle = '#fff'; ctx.fillRect(lx - s, ly - s, 1, 1); }
+  else { ctx.fillStyle = '#5a1c2a'; ctx.fillRect(lx - s, ly - s, 1 + 2 * s, 1 + 2 * s); }
+}
+function brackets(x, y, col, big) {
+  ctx.fillStyle = col; const w = big ? 16 : 12, h = w, x0 = x - w / 2, y0 = y - h / 2;
+  ctx.fillRect(x0, y0, 4, 1); ctx.fillRect(x0, y0, 1, 4); ctx.fillRect(x0 + w - 3, y0, 4, 1); ctx.fillRect(x0 + w, y0, 1, 4);
+  ctx.fillRect(x0, y0 + h, 4, 1); ctx.fillRect(x0, y0 + h - 3, 1, 4); ctx.fillRect(x0 + w - 3, y0 + h, 4, 1); ctx.fillRect(x0 + w, y0 + h - 3, 1, 4);
+}
+function cloud(cx, cy) {
+  ctx.globalAlpha = .9;
+  [[0, 0, 12], [14, 3, 10], [-13, 4, 9], [6, -7, 9], [-5, -5, 7]].forEach(([dx, dy, r]) => blob(ctx, cx + dx, cy + dy + 1, r, '#c9c3e3'));
+  [[0, -1, 11], [14, 2, 9], [-13, 3, 8], [6, -8, 8], [-5, -6, 6]].forEach(([dx, dy, r]) => blob(ctx, cx + dx, cy + dy, r, '#f6f3ff'));
+  ctx.globalAlpha = 1;
+}
+let fontOk = false; (document.fonts ? document.fonts.load('8px "Press Start 2P"') : Promise.resolve()).then(() => fontOk = true, () => fontOk = true);
+// labels are drawn on the display canvas so the text stays sharp at any zoom
+function tag(txt, wx, wy, col, small) {
+  const z = Math.min(1.5, Math.max(1, V.k / V.dpr / 2.5)), u = small ? Math.max(1, Math.round(V.dpr)) : Math.max(2, Math.round(V.dpr * 1.5 * z)), fs = 8 * u;
+  vctx.font = fs + 'px "Press Start 2P", monospace'; const w = Math.ceil(vctx.measureText(txt).width) + 6 * u, h = fs + 5 * u;
+  const [sx, sy] = toScreen(wx, wy);
+  const bx = Math.max(4, Math.min(view.width - w - 4, Math.round(sx - w / 2))), by = Math.max(4, Math.min(view.height - h - 4, Math.round(sy - h)));
+  vctx.fillStyle = 'rgba(28,26,46,.85)'; vctx.fillRect(bx, by, w, h);
+  vctx.fillStyle = col; vctx.fillText(txt, bx + 3 * u, by + fs + 2 * u);
+}
+const REGION_AT = {};
+REGIONS.forEach(r => { const bs = BLOCKS.filter(b => b.region === r); REGION_AT[r] = [bs.reduce((s, b) => s + b.X0 + BS / 2, 0) / bs.length, bs.reduce((s, b) => s + b.Y0 + BS / 2, 0) / bs.length]; });
+{ const pz = BLOCKS.find(b => b.kind === 'PLAZA'); REGION_AT.CENTRAL = [pz.X0 + BS / 2, pz.Y0 + BS / 2]; }
+function labels() {
+  const zoomed = V.k / V.dpr >= 2.4;
+  hubs.forEach(h => { const dn = hubDown(h.name); if (zoomed || dn) tag(h.name + (dn ? ' DOWN' : ''), h.lx, h.ly - 5, dn ? C.down : '#ece8ff', true); });
+  REGIONS.forEach(r => { const dn = hubs.some(h => h.region === r && hubDown(h.name)); const [x, y] = REGION_AT[r], [wx, wy] = iso(x, y); tag(r, wx, wy - 20, dn ? C.down : '#ece8ff'); });
+}
+let last = performance.now();
+function frame(ts) {
+  const dt = Math.min(100, ts - last); last = ts; step(dt);
+  ctx.drawImage(ground, 0, 0);
+  if (!reduce) { ctx.fillStyle = '#9dbdea'; const ph = Math.floor(simT / 450); waves.forEach(w => { if ((ph + w.p) % 3 === 0) ctx.fillRect(w.x, w.y, 3, 1); }); }
+  BLOCKS.forEach(b => { if (!b.hub || !hubDown(b.hub)) return;
+    const a = reduce ? .22 : .16 + .1 * Math.sin(simT / 220); ctx.globalAlpha = Math.max(0, a);
+    b.tiles.forEach(([x, y]) => diamond(ctx, x, y, '#ff3050')); ctx.globalAlpha = 1; });
+  const list = ents.slice();
+  cars.forEach(c => { const gx = c.axis === 'x' ? c.t : c.lane, gy = c.axis === 'x' ? c.lane : c.t;
+    if (gx < 0 || gy < 0 || gx >= N || gy >= N) return;
+    const s = carSprite(c.col, c.axis), [sx, sy] = iso(gx, gy), [bx, by] = iso(0, 0);
+    list.push({ key: gx + gy + .6, canvas: s.canvas, ox: s.ox + sx - bx, oy: s.oy + sy - by }); });
+  people.forEach(p => { const [sx, sy] = iso(p.x, p.y); list.push({ key: p.x + p.y, draw: () => { ctx.fillStyle = p.col; ctx.fillRect(sx, sy - 3, 1, 3); ctx.fillStyle = '#f1c9a5'; ctx.fillRect(sx, sy - 4, 1, 1); } }); });
+  { const bx = lake.X0 + 8.4 + Math.sin(boat.t / 5000) * 2.4, by = lake.Y0 + 9.6, [sx, sy] = iso(bx, by);
+    list.push({ key: bx + by, draw: () => { ctx.fillStyle = '#f4f2fa'; ctx.fillRect(sx - 6, sy, 12, 2); ctx.fillStyle = '#c94f4f'; ctx.fillRect(sx - 5, sy + 2, 10, 1); ctx.fillStyle = '#d9d6ea'; ctx.fillRect(sx - 2, sy - 3, 5, 3); ctx.fillStyle = '#86b9dc'; ctx.fillRect(sx - 1, sy - 2, 3, 1); } }); }
+  list.sort((a, b) => a.key - b.key);
+  list.forEach(e => { if (e.draw) e.draw(); else ctx.drawImage(e.canvas, e.ox, e.oy);
+    if (e.lights) e.lights.forEach(i => drawLight(nodes[i])); if (e.hubLight) drawLight(e.hubLight, true); });
+  if (hover && hover !== selected) brackets(hover.lx, hover.ly, '#ffffff', hover.isHub);
+  if (selected) brackets(selected.lx, selected.ly, C.gold, selected.isHub);
+  const drift = reduce ? 0 : Math.sin(simT / 9000) * 8;
+  cloud(40 + drift, CH - 40); cloud(CW - 50 - drift, 30); cloud(CW * .72 + drift, CH - 26);
+  blit();
+  requestAnimationFrame(frame);
+}
+
+// ---------- view: integer pixel scaling in device pixels, zoom and pan ----------
+const V = { dpr: 1, k: 0, cx: CW / 2, cy: CH / 2, fit: 2, home: 2 };
+const mini = $('#mini'), mctx = mini.getContext('2d');
+const toScreen = (wx, wy) => [Math.round(view.width / 2 + (wx - V.cx) * V.k), Math.round(view.height / 2 + (wy - V.cy) * V.k)];
+function fitK() { const kf = Math.min(view.width / CW, view.height / CH), kr = Math.round(kf);
+  return kf < 1 ? kf : (kr - kf) / kf < .2 ? Math.max(1, kr) : Math.floor(kf); }
+function clampView() {
+  const hw = view.width / 2 / V.k, hh = view.height / 2 / V.k;
+  V.cx = CW / 2 <= hw ? CW / 2 : Math.max(hw, Math.min(CW - hw, V.cx));
+  V.cy = CH / 2 <= hh ? CH / 2 : Math.max(hh, Math.min(CH - hh, V.cy));
+}
+function sizeView() {
+  V.dpr = window.devicePixelRatio || 1;
+  const cssW = view.parentElement.clientWidth, cssH = view.parentElement.clientHeight;
+  view.width = Math.max(1, Math.round(cssW * V.dpr)); view.height = Math.max(1, Math.round(cssH * V.dpr));
+  V.fit = fitK(); V.home = Math.max(V.fit, Math.round(1.6 * V.dpr)); if (!V.k) V.k = V.home; if (V.k < V.fit) V.k = V.fit; clampView();
+  const mw = mini.parentElement.clientWidth - 24; mini.width = Math.round(mw * V.dpr); mini.height = Math.round(mw * CH / CW * V.dpr); mini.style.height = Math.round(mw * CH / CW) + 'px';
+}
+function zoom(dir) {
+  if (dir === 0) { V.k = V.fit; V.cx = CW / 2; V.cy = CH / 2; clampView(); return; }
+  const unit = Math.max(1, Math.round(V.dpr));
+  const steps = [...new Set([V.fit, V.home, ...[1, 2, 3, 4, 5, 6, 8, 10, 12].map(v => v * unit)])].filter(v => v >= V.fit).sort((a, b) => a - b);
+  const i = steps.findIndex(v => v >= V.k - 1e-6); V.k = steps[Math.max(0, Math.min(steps.length - 1, i + dir))]; clampView();
+}
+{ const ro = new ResizeObserver(sizeView); ro.observe(view.parentElement); ro.observe(mini.parentElement); } sizeView();
+function blit() {
+  vctx.imageSmoothingEnabled = false; vctx.fillStyle = '#57557d'; vctx.fillRect(0, 0, view.width, view.height);
+  const [x0, y0] = toScreen(0, 0); vctx.drawImage(cv, x0, y0, Math.round(CW * V.k), Math.round(CH * V.k));
+  if (fontOk) labels();
+  drawMini();
+}
+function drawMini() {
+  const s = mini.width / CW, d = Math.max(1, V.dpr);
+  mctx.imageSmoothingEnabled = true; mctx.drawImage(ground, 0, 0, mini.width, mini.height);
+  mctx.fillStyle = 'rgba(79,224,143,.9)'; nodes.forEach(n => { if (eff(n) === 'up') mctx.fillRect(n.lx * s - d, n.ly * s - d, 2 * d, 2 * d); });
+  nodes.forEach(n => { const st = eff(n); if (st === 'up') return; const r = st === 'down' ? 4 * d : 3 * d; mctx.fillStyle = st === 'down' ? C.down : C.warn; mctx.fillRect(n.lx * s - r / 2, n.ly * s - r / 2, r, r); });
+  hubs.forEach(h => { const r = 3 * d; mctx.strokeStyle = hubDown(h.name) ? C.down : '#ece8ff'; mctx.lineWidth = d; mctx.strokeRect(h.lx * s - r / 2, h.ly * s - r / 2, r, r); });
+  const vw = view.width / V.k, vh = view.height / V.k;
+  mctx.strokeStyle = C.gold; mctx.lineWidth = Math.max(1, Math.round(d)); mctx.strokeRect((V.cx - vw / 2) * s, (V.cy - vh / 2) * s, vw * s, vh * s);
+}
+requestAnimationFrame(frame);
+
+// ---------- input ----------
+function worldAt(e) { const r = view.getBoundingClientRect(), px = (e.clientX - r.left) * view.width / r.width, py = (e.clientY - r.top) * view.height / r.height;
+  return [V.cx + (px - view.width / 2) / V.k, V.cy + (py - view.height / 2) / V.k]; }
+function nodeAt(e) {
+  const [mx, my] = worldAt(e), rad = Math.max(3, 12 / V.k * V.dpr);
+  let best = null, bd = rad * rad;
+  nodes.concat(hubs).forEach(n => { const dx = n.lx - mx, dy = n.ly - my, dd = dx * dx + dy * dy * 1.4; if (dd < bd) { bd = dd; best = n; } });
+  return best;
+}
+let drag = null;
+view.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, cx: V.cx, cy: V.cy, moved: false }; view.setPointerCapture(e.pointerId); });
+view.addEventListener('pointermove', e => {
+  if (drag) { const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (drag.moved) { V.cx = drag.cx - dx * V.dpr / V.k; V.cy = drag.cy - dy * V.dpr / V.k; clampView(); view.style.cursor = 'grabbing'; return; } }
+  hover = nodeAt(e); view.style.cursor = hover ? 'pointer' : 'grab'; });
+view.addEventListener('pointerup', e => { if (drag && !drag.moved) { selected = nodeAt(e) || selected; render(); } drag = null; view.style.cursor = 'grab'; });
+view.addEventListener('pointerleave', () => hover = null);
+$('#zin').addEventListener('click', () => { if (selected) { V.cx = selected.lx; V.cy = selected.ly; } zoom(1); });
+$('#zout').addEventListener('click', () => zoom(-1));
+$('#zfit').addEventListener('click', () => zoom(0));
+let miniDrag = false;
+const miniMove = e => { const r = mini.getBoundingClientRect(); V.cx = (e.clientX - r.left) / r.width * CW; V.cy = (e.clientY - r.top) / r.height * CH; if (V.k <= V.fit) V.k = V.home; clampView(); };
+mini.addEventListener('pointerdown', e => { miniDrag = true; mini.setPointerCapture(e.pointerId); miniMove(e); });
+mini.addEventListener('pointermove', e => { if (miniDrag) miniMove(e); });
+mini.addEventListener('pointerup', () => miniDrag = false);
+function focusOn(t) { selected = t; if (V.k < V.home) V.k = V.home; V.cx = t.lx; V.cy = t.ly; clampView(); render(); }
+$('#incs').addEventListener('click', e => { const li = e.target.closest('li[data-id]'); if (!li) return; const inc = incidents.find(i => String(i.id) === li.dataset.id); if (!inc) return;
+  const target = inc.kind === 'TRANSPORT_LINK_DOWN' ? hubByName[inc.root] : nodeByName[inc.root]; if (target) focusOn(target); });
+$('#site').addEventListener('click', e => { if (e.target.closest('.x')) { selected = null; render(); } });
+
+
+// ---------- panel ----------
+const barEl = $('#bar'); for (let i = 0; i < 20; i++) barEl.appendChild(document.createElement('span'));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const age = ms => { const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+let history = { name: null, rows: [], at: 0 };
+async function loadHistory(name) {
+  history = { name, rows: history.name === name ? history.rows : [], at: Date.now() };
+  try { const r = await fetch('/api/site/' + encodeURIComponent(name)); if (r.ok && history.name === name) { history.rows = await r.json(); render(); } } catch (e) { /* keep the old rows */ }
+}
+function render() {
+  const live = $('#live'), fresh = Date.now() - lastMessage < 6000;
+  if (!fresh) { live.textContent = '● OFFLINE · RECONNECTING'; live.className = 'live s-down'; live.title = 'No message from the map service in the last few seconds'; }
+  else if (!snapshot.ok) { live.textContent = '● DATABASE ERROR'; live.className = 'live s-down'; live.title = snapshot.error; }
+  else { live.textContent = '● LIVE'; live.className = 'live s-up'; live.title = ''; }
+  $('#updated').textContent = snapshot && snapshot.ok ? 'updated ' + hhmmss(snapshot.time) : '';
+  let up = 0, dg = 0, dn = 0; nodes.forEach(n => { const s = eff(n); s === 'up' ? up++ : s === 'degraded' ? dg++ : dn++; });
+  const pct = (up + dg) / nodes.length * 100, tone = pct >= 97 ? 'up' : pct >= 85 ? 'degraded' : 'down';
+  $('#availPct').textContent = pct.toFixed(1) + '%'; $('#availPct').className = 'big s-' + tone;
+  $('#availSites').textContent = `${up + dg}/${nodes.length} sites`;
+  const lit = Math.round(pct / 5), colr = { up:'var(--up)', degraded:'var(--warn)', down:'var(--down)' }[tone];
+  [...barEl.children].forEach((s, i) => s.style.background = i < lit ? colr : '');
+  $('#cUp').textContent = up; $('#cDeg').textContent = dg; $('#cDown').textContent = dn;
+  if (snapshot && snapshot.ok) {
+    $('#nAlarms').textContent = snapshot.last_hour.alarms; $('#nInc').textContent = snapshot.last_hour.incidents;
+    $('#log').innerHTML = snapshot.feed.map(f => `<li><span class="t">${hhmmss(f.ts)}</span> <span class="${f.event === 'clear' ? 'sev-clear' : 'sev-' + f.severity}">${esc(f.node)} ${esc(f.alarm)} ${f.event === 'clear' ? 'cleared' : esc(f.severity)}</span></li>`).join('');
+  }
+  $('#incs').innerHTML = incidents.length ? incidents.map(i => `<li data-id="${i.id}" title="Show on the map"><span class="id">INC-${i.id}</span> ${esc(title(i.kind))}<br><span class="meta">${i.region} · ${i.hub} · ${i.site_count} site${i.site_count === 1 ? '' : 's'} · ${i.alarm_count} alarm${i.alarm_count === 1 ? '' : 's'} · ${age(i.age * 1000)}</span></li>`).join('')
+    : '<li class="meta">All clear.</li>';
+  const site = $('#site'), X = '<button class="x" type="button" aria-label="Clear selection">×</button>';
+  if (!selected) { site.innerHTML = '<h2>Selected site</h2><div class="muted">Click any light on the map. The big lights on lattice towers are the 20 transport hubs. Drag to move; click an incident to jump to it.</div>'; return; }
+  if (selected.isHub) {
+    const h = selected, dnH = hubDown(h.name), ns = nodes.filter(n => n.hub === h.name), down = ns.filter(n => eff(n) === 'down').length;
+    const i = incidents.find(i => i.kind === 'TRANSPORT_LINK_DOWN' && i.root === h.name);
+    site.innerHTML = `${X}<h2>Selected hub</h2><div><span class="name">${h.name}</span><span class="pill s-${dnH ? 'down' : 'up'}">${dnH ? 'DOWN' : 'UP'}</span></div>
+      <p class="muted">${h.region} · transport hub · ${ns.length} sites behind it</p>
+      <p>${down} of ${ns.length} sites down</p>
+      <p>${i ? `<span class="id">INC-${i.id}</span> ${esc(title(i.kind))}` : '<span class="muted">No open incident</span>'}</p>`;
+    return;
+  }
+  const n = selected, s = eff(n), inc = n.incident ? incidents.find(i => i.id === n.incident) : null;
+  if (history.name !== n.name || Date.now() - history.at > 5000) loadHistory(n.name);
+  site.innerHTML = `${X}<h2>Selected site</h2><div><span class="name">${n.name}</span><span class="pill s-${s}">${s.toUpperCase()}</span></div>
+    <p class="muted">${n.region} · ${n.hub} · ${esc(n.where)}</p>
+    <p>${n.alarms.length ? 'Active: ' + n.alarms.map(a => `<span class="${a === 'NODE_DOWN' ? 'sev-critical' : 'sev-major'}">${esc(a)}</span>`).join(', ') : '<span class="muted">No active alarms</span>'}</p>
+    <p>${n.incident ? `<span class="id">INC-${n.incident}</span> ${inc ? esc(title(inc.kind)) : ''}` : '<span class="muted">No open incident</span>'}</p>
+    ${history.name === n.name && history.rows.length ? '<ul class="log" style="min-height:0;margin-top:6px">' + history.rows.map(h => `<li><span class="t">${hhmmss(h.ts)}</span> <span class="${h.event === 'clear' ? 'sev-clear' : 'sev-' + h.severity}">${esc(h.alarm)}${h.event === 'clear' ? ' cleared' : ''}</span></li>`).join('') + '</ul>' : ''}`;
+}
+setInterval(render, 1000); render();
+})();
+</script>
+</html>
