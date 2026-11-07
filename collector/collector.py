@@ -1,11 +1,12 @@
 """Reads alarms from Kafka and stores them in PostgreSQL."""
 import json
 import psycopg
+import os
 from confluent_kafka import Consumer
 
-KAFKA = "localhost:9092"
+KAFKA = os.getenv("KAFKA", "localhost:9092")
 TOPIC = "ran.alarms"
-DB = "postgresql://ranmon:ranmon@localhost:5432/ranmon"
+DB = os.getenv("DB", "postgresql://ranmon:ranmon@localhost:5432/ranmon")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS alarms (
@@ -30,6 +31,7 @@ consumer = Consumer({
     "group.id": "collector",
     "auto.offset.reset": "earliest",   # on first run, start from the oldest alarm
     "enable.auto.commit": False,       # only mark alarms as read once they're saved
+    "allow.auto.create.topics": True,
 })
 consumer.subscribe([TOPIC])
 

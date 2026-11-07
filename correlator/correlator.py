@@ -11,10 +11,11 @@ Rules:
      arrived for HOLD_DOWN seconds (so a flapping link stays one incident).
 """
 import time
+import os
 from datetime import timedelta
 import psycopg
 
-DB = "postgresql://ranmon:ranmon@localhost:5432/ranmon"
+DB = os.getenv("DB", "postgresql://ranmon:ranmon@localhost:5432/ranmon")
 POLL_SECONDS = 2
 MERGE_WINDOW = timedelta(seconds=30)   # site outages this close before a hub failure belong to it
 HOLD_DOWN = timedelta(seconds=60)

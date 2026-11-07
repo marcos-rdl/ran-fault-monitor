@@ -10,6 +10,7 @@ database the same.
   WS  /ws               the snapshot, pushed every 2 seconds
 """
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse
 from psycopg.rows import dict_row
  
-DB = "postgresql://ranmon:ranmon@localhost:5432/ranmon"
+DB = os.getenv("DB", "postgresql://ranmon:ranmon@localhost:5432/ranmon")
 PUSH_SECONDS = 2
 PAGE = Path(__file__).parent / "static" / "index.html"
  

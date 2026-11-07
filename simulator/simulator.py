@@ -5,7 +5,7 @@ Faults: single-site outages, power failures (sites run on battery, then may go d
 flapping links, high temperature, and hub failures that take down all 25 sites
 behind them at once (an alarm storm). Every fault is cleared when it recovers.
 """
-import heapq, itertools, json, random, time
+import heapq, os, itertools, json, random, time
 from datetime import datetime, timezone
 from confluent_kafka import Producer
 
@@ -20,8 +20,7 @@ FIRST_HUB_FAILURE = 60              # seconds after start, so you see a storm ea
 FLAKY_SITES = 5                     # a few bad sites that fail far more often than the rest
 FLAKY_FACTOR = 15
 
-producer = Producer({"bootstrap.servers": "localhost:9092"})
-
+producer = Producer({"bootstrap.servers": os.getenv("KAFKA", "localhost:9092")})
 # ---------- the network ----------
 sites = []
 for region in REGIONS:

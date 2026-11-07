@@ -14,10 +14,11 @@ Faults are counted instead of incidents because the correlator keeps a site that
 fails again right after recovering in the same incident.
 """
 import time
+import os
 from datetime import datetime
 import psycopg
 
-DB = "postgresql://ranmon:ranmon@localhost:5432/ranmon"
+DB = os.getenv("DB", "postgresql://ranmon:ranmon@localhost:5432/ranmon")
 SITES = 500                  # every site counts, including the ones with no faults
 WINDOW = "60 minutes"
 Z_THRESHOLD = 3.5
